@@ -81,6 +81,7 @@ _RAG_SYSTEM_PROMPT: SystemMessageReplaceConfig = {
 4. 自分の学習データ・一般知識・推論による補完は絶対に行わないこと
 5. 検索結果に該当情報がない場合は「仕様書に該当情報が見つかりませんでした」とだけ回答すること
 6. ファイルシステムやコードベースを直接参照しないこと
+7. `knowledge_search` が1件以上の `<context>` を返した場合、**「未登録」「見つからない」「インデックスされていない」などの否定断定をしてはならない**
 
 ## 回答の作成方法
 - `knowledge_search` が返したテキストから該当箇所を**そのまま引用・要約**する
@@ -92,6 +93,7 @@ _RAG_SYSTEM_PROMPT: SystemMessageReplaceConfig = {
 ## 出力ルール
 - 回答末尾に必ず「根拠」セクションを設け、`ファイル名` と `チャンクID` を列挙する
 - 根拠が不足する場合は「仕様書に該当情報が見つかりませんでした」と回答する
+- `knowledge_search` の返却に `<context` が含まれる場合は、最低1件以上の根拠を必ず挙げること
 
 ## 厳守事項（違反禁止）
 - `knowledge_search` を呼ばずに直接回答すること → **禁止**
@@ -115,6 +117,7 @@ _REASONING_SYSTEM_PROMPT: SystemMessageReplaceConfig = {
 1. ユーザーから質問を受けたら、**必ず最初に `knowledge_search` ツールを呼び出す**こと
 2. 1回の検索で情報が不十分な場合は、別のキーワードで追加検索すること
 3. ファイルシステムやコードベースを直接参照しないこと
+4. `knowledge_search` が1件以上の `<context>` を返した場合、**「未登録」「見つからない」「インデックスされていない」などの否定断定をしてはならない**
 
 ## 回答の作成方法
 1. **仕様書の根拠**: `knowledge_search` の検索結果から関連情報を引用・要約し、ソースファイル名を明示する
@@ -236,7 +239,7 @@ def _build_knowledge_search_tool(
 
         if not results:
             logger.info("knowledge_search: no results for %r", params.query)
-            return "該当する仕様書の情報が見つかりませんでした。"
+            return "検索結果件数: 0件\n該当する仕様書の情報が見つかりませんでした。"
 
         parts = []
         for i, r in enumerate(results, 1):
@@ -249,6 +252,11 @@ def _build_knowledge_search_tool(
                 f"</context>"
             )
         result_text = "\n\n---\n\n".join(parts)
+        result_text = (
+            f"検索結果件数: {len(results)}件\n"
+            "以下は仕様書検索の結果データです。<context> が1件以上ある場合は、その内容に基づいて回答してください。\n\n"
+            f"{result_text}"
+        )
         logger.info("knowledge_search: %d results returned", len(results))
         return result_text
 

@@ -76,6 +76,12 @@ source .venv/bin/activate
 uvicorn app.main:app --env-file .env --host 0.0.0.0 --port 8080
 ```
 
+> [!WARNING]
+> .envファイルは最初はありません。.env.example から作成ください。
+> .env を設定しない場合は ```--env-file .env``` を未設定で起動ください。
+> 未設定時は .env.example の内容をハードコーディングしているためその内容で動作します。
+
+
 アクセス先: `http://localhost:8080`
 
 ## 設定

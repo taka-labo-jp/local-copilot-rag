@@ -131,6 +131,7 @@ const I18N = {
     modelFetchZero: "モデル取得0件",
     modelFetchFallback: "モデル取得失敗、フォールバック使用:",
     chatError: "エラー: {message}",
+    chatBackendUnavailable: "バックエンドに接続できません。サーバーを起動してください（例: uvicorn app.main:app --host 0.0.0.0 --port 8080）。",
     chatNoResponse: "（応答がありませんでした）",
     historyFetchFailed: "履歴取得失敗",
     advancedFilterWing: "wing: {value}",
@@ -235,6 +236,7 @@ const I18N = {
     modelFetchZero: "No models returned",
     modelFetchFallback: "Failed to load models. Using fallback:",
     chatError: "Error: {message}",
+    chatBackendUnavailable: "Cannot connect to backend. Start the server (e.g. uvicorn app.main:app --host 0.0.0.0 --port 8080).",
     chatNoResponse: "(No response returned)",
     historyFetchFailed: "Failed to load history",
     advancedFilterWing: "wing: {value}",
@@ -782,6 +784,23 @@ function removeTyping() {
   if (el) el.closest(".msg")?.remove();
 }
 
+function normalizeChatErrorMessage(error) {
+  const raw = String(error?.message || "").trim();
+  const msg = raw || "Unknown error";
+  const lower = msg.toLowerCase();
+  const unavailable =
+    lower.includes("failed to fetch") ||
+    lower.includes("networkerror") ||
+    lower.includes("connection refused") ||
+    lower.includes("err_connection_refused") ||
+    lower.includes("load failed");
+
+  if (unavailable) {
+    return t("chatBackendUnavailable");
+  }
+  return msg;
+}
+
 // ====================================================
 // チャット送信
 // ====================================================
@@ -868,8 +887,9 @@ async function sendMessage() {
 
   } catch (e) {
     removeTyping();
-    botBubble.textContent = `⚠️ ${t("chatError", { message: e.message })}`;
-    showToast(e.message, "error");
+    const message = normalizeChatErrorMessage(e);
+    botBubble.textContent = `⚠️ ${t("chatError", { message })}`;
+    showToast(message, "error");
   } finally {
     setInputEnabled(true);
     inputEl.focus();
