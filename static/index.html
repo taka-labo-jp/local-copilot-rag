@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec Copilot</title>
+  <link rel="stylesheet" href="/style.css?v=20260419-7" />
+  <script src="/vendor/marked.min.js"></script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== サイドバー ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="3" width="18" height="18" rx="3" fill="#58a6ff" opacity=".2"/>
+          <path d="M7 8h10M7 12h7M7 16h5" stroke="#58a6ff" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <h1>Spec Copilot</h1>
+      </div>
+      <button class="sidebar-toggle-btn" id="sidebarToggleBtn" type="button" aria-label="サイドバーを折りたたむ" title="サイドバー開閉">◀</button>
+    </div>
+
+    <!-- 仕様書セクション -->
+    <div class="sb-section" id="docSection">
+      <button class="sb-section-header" id="docSectionToggle" aria-expanded="true">
+        <span class="sb-section-icon">📁</span>
+        <span class="sb-section-label" id="docSectionLabel">仕様書</span>
+        <span class="sb-badge" id="docBadge">0</span>
+        <svg class="sb-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div class="sb-section-body" id="docSectionBody">
+        <details class="sidebar-tools" open>
+          <summary id="toolsSummary">アップロードと整理</summary>
+          <div class="sidebar-tools-body">
+            <!-- アップロードエリア（コンパクト） -->
+            <label class="upload-area" id="uploadArea">
+              <input type="file" id="fileInput" multiple
+                accept=".docx,.xlsx,.pptx,.doc,.xls,.ppt,.pdf,.html,.htm,.md,.txt,.csv,.json,.xml,.epub,.zip" />
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M7 1v8M4 4l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M1 10v1a2 2 0 002 2h8a2 2 0 002-2v-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              <span id="uploadLabel">アップロード / ドロップ</span>
+            </label>
+            <div class="upload-progress" id="uploadProgress">
+              <progress id="uploadBar" max="100" value="0"></progress>
+              <span id="uploadStatus" class="upload-status-text"></span>
+            </div>
+            <button class="bulk-upload-btn" id="bulkUploadBtn" type="button">一括アップロード（フォルダ再帰）</button>
+            <div class="bulk-upload-note" id="bulkUploadNote">対象フォルダ: bulk_uploads（再帰）</div>
+            <div class="project-toolbar">
+              <div class="project-row">
+                <select id="uploadProjectSelect" class="project-select" title="アップロード先プロジェクト">
+                  <option value="">アップロード先: 未分類</option>
+                </select>
+              </div>
+              <div class="project-row">
+                <button id="addProjectBtn" class="project-add-btn" type="button">プロジェクト追加</button>
+              </div>
+            </div>
+          </div>
+        </details>
+        <!-- 検索フィルター -->
+        <div class="doc-filter-wrap">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M8.5 8.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          <input type="text" id="docFilter" class="doc-filter" placeholder="ファイル名で絞込..." />
+        </div>
+        <!-- ドキュメントリスト（グループ表示） -->
+        <div class="doc-list" id="docList"></div>
+      </div>
+    </div>
+
+    <div class="sidebar-sep"></div>
+
+    <!-- 会話履歴セクション -->
+    <div class="sb-section sb-section--history" id="historySection">
+      <button class="sb-section-header" id="historySectionToggle" aria-expanded="true">
+        <span class="sb-section-icon">💬</span>
+        <span class="sb-section-label" id="historySectionLabel">会話履歴</span>
+        <span class="sb-badge" id="historyBadge">0</span>
+        <svg class="sb-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div class="sb-section-body" id="historySectionBody">
+        <button class="new-chat-btn" id="newChatBtn">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path d="M6.5 1v11M1 6.5h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span id="newChatLabel">新しい会話</span>
+        </button>
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </div>
+  </aside>
+  <div class="resize-handle" id="resizeHandle" aria-hidden="true"></div>
+
+  <!-- ===== メインエリア ===== -->
+  <main class="main">
+    <header class="main-header">
+      <div class="main-header-left">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <circle cx="10" cy="10" r="9" stroke="#58a6ff" stroke-width="1.5"/>
+          <path d="M6.5 7.5C6.5 5.57 8.07 4 10 4s3.5 1.57 3.5 3.5c0 1.5-.9 2.8-2.2 3.35V12h-2.6v-1.15C7.4 10.3 6.5 9 6.5 7.5Z" fill="#58a6ff" opacity=".6"/>
+          <rect x="8.7" y="14" width="2.6" height="2.5" rx="1" fill="#58a6ff"/>
+        </svg>
+        <span id="sessionTitle" style="font-size:14px; font-weight:600; color:var(--text-muted)">新しい会話</span>
+      </div>
+      <div class="main-header-actions">
+        <label class="language-select-wrap" for="languageSelect">🌐
+          <select id="languageSelect" class="language-select" title="言語">
+            <option value="ja">日本語</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <button id="themeToggleBtn" class="theme-toggle-btn" type="button" title="テーマ切替">🌙</button>
+      </div>
+    </header>
+
+    <section class="retrieval-panel" id="retrievalPanel" hidden>
+      <button class="retrieval-header" id="retrievalToggle" aria-expanded="false">
+        <span id="retrievalTitle">検索診断ログ</span>
+        <span class="retrieval-meta" id="retrievalMeta">0件</span>
+        <svg class="retrieval-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div class="retrieval-body" id="retrievalBody"></div>
+    </section>
+
+    <div class="messages" id="messagesEl" style="display:none;"></div>
+    <div class="welcome" id="welcomeEl">
+      <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+        <rect x="4" y="4" width="48" height="48" rx="12" fill="#58a6ff" opacity=".12"/>
+        <path d="M18 20h20M18 28h14M18 36h10" stroke="#58a6ff" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="42" cy="38" r="8" fill="#58a6ff" opacity=".9"/>
+        <path d="M39 38h6M42 35v6" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <h2 id="welcomeTitle">仕様書 RAG チャット</h2>
+      <p id="welcomeDesc">仕様書ファイル（Word / Excel / PDF など）をサイドバーからアップロードし、内容について質問してください。</p>
+      <p id="welcomeSubDesc" style="font-size:12px; color:var(--text-muted)">GitHub Copilot SDK がローカル知識ベースを検索し、仕様に基づいた回答を生成します。</p>
+    </div>
+
+    <div class="input-area">
+      <div class="search-scope" id="searchScope">
+        <div class="primary-controls">
+          <label class="mode-toggle" id="modeToggleLabel" title="推論ありモード: 仕様書を踏まえた設計提案・スキーマ検討を許可します">
+            <input type="checkbox" id="reasoningModeToggle" />
+            <span class="mode-toggle-track">
+              <span class="mode-toggle-thumb"></span>
+            </span>
+            <span class="mode-toggle-label-text" id="reasoningModeLabel">推論あり</span>
+          </label>
+          <select class="model-select" id="modelSelect">
+            <option value="">読み込み中...</option>
+          </select>
+        </div>
+        <details class="advanced-scope" id="advancedScope">
+          <summary id="advancedScopeSummary">詳細フィルタ: すべて</summary>
+          <div class="advanced-scope-body">
+            <select id="wingFilter" class="scope-select" title="検索対象wing">
+              <option value="">対象wing: すべて</option>
+            </select>
+            <input id="roomFilter" class="scope-input" placeholder="対象room（任意）" />
+            <select id="contentTypeFilter" class="scope-select" title="検索対象種別">
+              <option value="">対象種別: すべて</option>
+              <option value="text">テキスト</option>
+              <option value="table">表</option>
+              <option value="image">画像</option>
+              <option value="visual_page">ページOCR</option>
+            </select>
+          </div>
+        </details>
+      </div>
+      <div class="composer-shell">
+        <div class="context-bar" id="contextBar">
+          <div class="context-bar-head">
+            <span class="context-title" id="contextTitle">読み込むコンテキスト（⊕ ボタンまたは右クリックで追加）</span>
+          </div>
+          <div class="context-chips" id="contextChips">
+            <span class="context-empty">未選択（全仕様書を対象）</span>
+          </div>
+        </div>
+        <div class="input-row">
+          <textarea
+            id="inputEl"
+            rows="1"
+            placeholder="仕様について質問してください… (Enter で送信 / Shift+Enter で改行)"
+          ></textarea>
+          <button class="send-btn" id="sendBtn" disabled title="送信">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M1.5 14L14.5 8 1.5 2v4.5L10 8l-8.5 1.5V14z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="project-dialog-backdrop" id="projectDialogBackdrop" hidden>
+  <div class="project-dialog" role="dialog" aria-modal="true" aria-labelledby="projectDialogTitle">
+    <h3 id="projectDialogTitle">プロジェクト追加</h3>
+    <p class="project-dialog-help" id="projectDialogHelp">仕様書を整理するためのプロジェクト名を入力してください。</p>
+    <input id="projectDialogInput" class="project-dialog-input" placeholder="例: 新サービスA" />
+    <div class="project-dialog-actions">
+      <button id="projectDialogCancel" class="project-dialog-btn" type="button">キャンセル</button>
+      <button id="projectDialogCreate" class="project-dialog-btn primary" type="button">作成</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+  <script src="/app.js?v=20260419-13"></script>
+</body>
+</html>

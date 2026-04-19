@@ -1,0 +1,16 @@
+fastapi==0.136.0
+uvicorn[standard]==0.44.0
+python-multipart==0.0.20
+aiofiles==24.1.0
+github-copilot-sdk==0.2.2
+markitdown[all]==0.1.5
+langchain-core==0.3.52
+langchain-text-splitters==0.3.8
+langchain-chroma==0.2.3
+langchain-huggingface==0.1.2
+sentence-transformers==3.4.1
+pandas==2.2.3
+openpyxl==3.1.5
+Pillow==11.1.0
+pytesseract==0.3.13
+pypdfium2==5.0.0
