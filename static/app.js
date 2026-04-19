@@ -299,6 +299,54 @@ function escapeHtml(str) {
     .replaceAll("'", "&#39;");
 }
 
+function sanitizeRenderedHtml(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+
+  const blockedTags = new Set([
+    "script",
+    "style",
+    "iframe",
+    "object",
+    "embed",
+    "link",
+    "meta",
+    "base",
+    "form",
+  ]);
+
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
+  const elements = [];
+  while (walker.nextNode()) {
+    elements.push(walker.currentNode);
+  }
+
+  for (const el of elements) {
+    const tag = el.tagName.toLowerCase();
+    if (blockedTags.has(tag)) {
+      el.remove();
+      continue;
+    }
+
+    const attrs = Array.from(el.attributes);
+    for (const attr of attrs) {
+      const name = attr.name.toLowerCase();
+      const value = attr.value.trim().toLowerCase();
+
+      if (name.startsWith("on")) {
+        el.removeAttribute(attr.name);
+        continue;
+      }
+
+      if ((name === "href" || name === "src" || name === "xlink:href") && value.startsWith("javascript:")) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  }
+
+  return template.innerHTML;
+}
+
 function getContentTypeLabel(ct) {
   const map = {
     text: t("typeText"),
@@ -751,7 +799,7 @@ function appendMessage(role, contentOrEl) {
 
   if (typeof contentOrEl === "string") {
     if (role === "assistant") {
-      bubble.innerHTML = marked.parse(contentOrEl);
+      bubble.innerHTML = sanitizeRenderedHtml(marked.parse(contentOrEl));
       bubble.dataset.raw = contentOrEl;
       addCopyButtonToBubble(bubble, () => bubble.dataset.raw || "");
     } else {
@@ -864,7 +912,7 @@ async function sendMessage() {
           currentSessionId = ev.session_id;
         } else if (ev.type === "delta") {
           accumulated += ev.content;
-          botBubble.innerHTML = marked.parse(accumulated);
+          botBubble.innerHTML = sanitizeRenderedHtml(marked.parse(accumulated));
           botBubble.dataset.raw = accumulated;
           addCopyButtonToBubble(botBubble, () => botBubble.dataset.raw || "");
           scrollToBottom();
@@ -1135,7 +1183,7 @@ function buildDocList(docs, filterText = "") {
     projectHeader.innerHTML = `
       <span>📂</span>
       <span class="doc-project-name">${escapeHtml(projectName || t("unclassified"))}</span>
-      <span class="doc-group-count">${projectDocs.length}</span>
+      <span class="doc-count-badge">${projectDocs.length}</span>
       <span class="doc-project-actions"></span>
     `;
     const projectActions = projectHeader.querySelector(".doc-project-actions");
@@ -1217,7 +1265,7 @@ function buildDocList(docs, filterText = "") {
       header.innerHTML = `
         <span>${g.icon}</span>
         <span class="doc-group-label">${escapeHtml(getFileGroupLabel(g.key))}</span>
-        <span class="doc-group-count">${visible.length}/${items.length}</span>
+        <span class="doc-count-badge">${visible.length}/${items.length}</span>
         <span class="doc-group-actions"></span>
         <svg class="doc-group-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none">
           <path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1289,7 +1337,7 @@ function buildDocList(docs, filterText = "") {
         item.innerHTML = `
           <span class="doc-icon">${g.icon}</span>
           <span class="doc-name">${d.filename}</span>
-          <span class="doc-drawers">${t("docsCount", { count: d.drawer_count })}</span>
+          <span class="doc-drawers doc-count-badge">${t("docsCount", { count: d.drawer_count })}</span>
           <span class="doc-item-actions"></span>
         `;
         const itemActions = item.querySelector(".doc-item-actions");

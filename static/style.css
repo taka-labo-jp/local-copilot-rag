@@ -491,10 +491,12 @@ body.is-resizing * {
 }
 
 .doc-project-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
   padding: 6px 8px;
+  min-height: 32px;
   font-size: 11px;
   font-weight: 700;
   color: var(--text);
@@ -502,14 +504,38 @@ body.is-resizing * {
   border-bottom: 1px solid var(--border);
 }
 
-.doc-project-name { flex: 1; }
+.doc-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .doc-project-actions,
 .doc-group-actions,
 .doc-item-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
+  min-width: 52px;
+}
+
+.doc-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(88, 166, 255, 0.35);
+  white-space: nowrap;
 }
 
 .doc-action-btn {
@@ -555,10 +581,12 @@ body.is-resizing * {
   display: none;
 }
 .doc-group-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: 5px;
+  column-gap: 5px;
   padding: 4px 6px;
+  min-height: 30px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
@@ -568,13 +596,11 @@ body.is-resizing * {
   user-select: none;
 }
 .doc-group-header:hover { background: var(--surface2); color: var(--text); }
-.doc-group-label { flex: 1; }
-.doc-group-count {
-  font-size: 10px;
-  color: var(--accent);
-  background: var(--accent-dim);
-  padding: 1px 5px;
-  border-radius: 8px;
+.doc-group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .doc-group-chevron {
   flex-shrink: 0;
@@ -586,10 +612,12 @@ body.is-resizing * {
 
 /* ドキュメントアイテム */
 .doc-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
   padding: 4px 6px 4px 18px;
+  min-height: 30px;
   border-radius: 5px;
   font-size: 12px;
   color: var(--text-muted);
@@ -599,7 +627,10 @@ body.is-resizing * {
 .doc-item:hover { background: var(--surface2); color: var(--text); }
 .doc-item .doc-icon { flex-shrink: 0; font-size: 13px; }
 .doc-item .doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-.doc-item .doc-drawers { font-size: 10px; color: var(--accent); flex-shrink: 0; }
+.doc-item .doc-drawers {
+  color: var(--accent);
+  flex-shrink: 0;
+}
 .doc-item.hidden { display: none; }
 .doc-item.dragging { opacity: .45; }
 
@@ -650,17 +681,25 @@ body.is-resizing * {
 .history-item.active { background: var(--accent-dim); color: var(--accent); }
 .history-item .h-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .history-item .h-del {
-  display: none;
+  width: 22px;
+  height: 22px;
   background: none;
-  border: none;
+  border: 1px solid transparent;
   color: var(--danger);
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 0;
   font-size: 13px;
   border-radius: 4px;
   flex-shrink: 0;
+  opacity: 0;
+  transition: opacity .12s ease, border-color .12s ease;
 }
-.history-item:hover .h-del { display: block; }
+.history-item:hover .h-del,
+.history-item .h-del:focus-visible { opacity: 1; }
+
+.history-item .h-del:hover {
+  border-color: var(--danger);
+}
 
 /* ===== メインエリア ===== */
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
