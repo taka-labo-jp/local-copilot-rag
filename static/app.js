@@ -25,6 +25,12 @@ const uploadArea     = document.getElementById("uploadArea");
 const uploadProgress = document.getElementById("uploadProgress");
 const uploadBar      = document.getElementById("uploadBar");
 const uploadStatus   = document.getElementById("uploadStatus");
+const uploadModalOverlay = document.getElementById("uploadModalOverlay");
+const uploadModalTitle = document.getElementById("uploadModalTitle");
+const uploadModalBar = document.getElementById("uploadModalBar");
+const uploadModalPercent = document.getElementById("uploadModalPercent");
+const uploadModalStatus = document.getElementById("uploadModalStatus");
+const uploadModalCancelBtn = document.getElementById("uploadModalCancelBtn");
 const bulkUploadBtn  = document.getElementById("bulkUploadBtn");
 const addProjectBtn  = document.getElementById("addProjectBtn");
 const uploadProjectSelect = document.getElementById("uploadProjectSelect");
@@ -45,6 +51,20 @@ const retrievalPanel = document.getElementById("retrievalPanel");
 const retrievalToggle = document.getElementById("retrievalToggle");
 const retrievalMeta = document.getElementById("retrievalMeta");
 const retrievalBody = document.getElementById("retrievalBody");
+const todoWorkflow = document.getElementById("todoWorkflow");
+const todoSummaryBadges = document.getElementById("todoSummaryBadges");
+const todoSummaryEmptyEl = document.getElementById("todoSummaryEmpty");
+const todoOpenBtn = document.getElementById("todoOpenBtn");
+const todoDrawerBackdrop = document.getElementById("todoDrawerBackdrop");
+const todoDrawerCloseBtn = document.getElementById("todoDrawerCloseBtn");
+const todoList = document.getElementById("todoList");
+const todoDetail = document.getElementById("todoDetail");
+const todoDetailEmpty = document.getElementById("todoDetailEmpty");
+const todoPreviewOverlay = document.getElementById("todoPreviewOverlay");
+const todoPreviewTitle = document.getElementById("todoPreviewTitle");
+const todoPreviewBody = document.getElementById("todoPreviewBody");
+const todoPreviewCancelBtn = document.getElementById("todoPreviewCancelBtn");
+const todoPreviewConfirmBtn = document.getElementById("todoPreviewConfirmBtn");
 const sidebar = document.querySelector(".sidebar");
 const sidebarToggleBtn = document.getElementById("sidebarToggleBtn");
 const resizeHandle = document.getElementById("resizeHandle");
@@ -58,14 +78,22 @@ const historySectionBody   = document.getElementById("historySectionBody");
 // ---- 状態 ----
 let currentSessionId = null;
 let isStreaming = false;
+let isUploading = false;
 let allDocs = [];
 let allProjects = [];
 let selectedContexts = [];
 let draggingDocId = null;
+let modelLoadRequestSeq = 0;
 let sidebarWidth = Number(localStorage.getItem("spec-copilot.sidebarWidth") || 300);
 let sidebarCollapsed = localStorage.getItem("spec-copilot.sidebarCollapsed") === "1";
 let currentLang = localStorage.getItem("spec-copilot.lang") || "ja";
 let currentTheme = localStorage.getItem("spec-copilot.theme") || "";
+let currentTodos = [];
+let currentTodoId = null;
+let currentTodoPreviewMessageId = null;
+let currentTodoDetailData = null;
+let currentHistorySessions = [];
+let todoOverlayConfirmAction = null;
 
 const DEFAULT_SIDEBAR_WIDTH = 300;
 const MIN_SIDEBAR_WIDTH = 200;
@@ -179,6 +207,60 @@ const I18N = {
     bulkUploadStarted: "一括アップロード開始...",
     chatStatusThinking: "✍️ 回答生成中...",
     chatStatusSearching: "🔍 コンテキスト検索中: {query}",
+    todoOpenList: "一覧を開く",
+    todoStatusDraft: "下書き",
+    todoStatusInProgress: "対応中",
+    todoStatusReviewRequired: "レビュー待ち",
+    todoStatusDone: "完了",
+    todoSummaryEmpty: "この会話のTODOはまだありません",
+    todoSummaryCount: "この会話のTODO {count}件",
+    todoSummaryLoadFailed: "TODOの取得に失敗しました",
+    todoPreviewGeneratingTitle: "TODO草案を生成中...",
+    todoPreviewGeneratingNote: "回答内容から TODO テンプレートを作成しています。",
+    todoPreviewConfirmTitle: "このTODOで作成します。変更があれば編集してください。",
+    todoPreviewConfirmButton: "このTODOで作成",
+    todoTitleRequired: "タイトルは必須です",
+    todoCreated: "TODOを作成しました",
+    todoActionFailed: "{action}失敗: {message}",
+    todoActionCreate: "TODO作成",
+    todoActionPreview: "TODO草案生成",
+    todoActionSave: "TODO保存",
+    todoActionApprove: "承認",
+    todoActionDraft: "AIドラフト生成",
+    todoFieldTitle: "タイトル",
+    todoFieldDescription: "説明",
+    todoFieldAcceptance: "受け入れ条件",
+    todoFieldStatus: "ステータス",
+    todoSave: "保存",
+    todoSaveDone: "保存しました",
+    todoApproveDoneButton: "承認して完了",
+    todoApproveDone: "承認して完了しました",
+    todoApproveHintReady: "レビュー待ちなので承認して完了できます。",
+    todoApproveHintNeedReview: "承認して完了は「レビュー待ち」に保存したあとに有効になります。",
+    todoDraftButton: "AIドラフト生成",
+    todoDraftGenerated: "AIドラフトを生成しました",
+    todoDraftModalProgressTitle: "AIドラフトを生成中...",
+    todoDraftModalResultTitle: "AIドラフトの生成が完了しました",
+    todoDraftModalErrorTitle: "AIドラフト生成に失敗しました",
+    todoDraftModalContextTitle: "この情報をもとにドラフトを作成しています",
+    todoDraftModalResultBody: "TODOをもとにしたドラフトをチャットに追加しました。内容を確認してください。",
+    todoOverlayClose: "閉じる",
+    todoOverlayGenerating: "生成中...",
+    todoRelatedMessageCount: "関連メッセージ: {count}",
+    todoDraftMessageIds: "ドラフト: {ids}",
+    todoNone: "なし",
+    todoSummaryBreakdown: "下書き {draft} / 対応中 {inProgress} / レビュー待ち {reviewRequired} / 完了 {done}",
+    historyTodoBadge: "TODO {count}",
+    deleteSessionTodoTitle: "TODOがありますが削除しますか？",
+    deleteSessionTodoMessage: "この会話には {count} 件のTODOがあります。削除すると関連するTODOとログも消えます。",
+    deleteSessionTodoBreakdown: "ステータス別件数: {summary}",
+    deleteSessionTodoItems: "対象TODO",
+    deleteSessionConfirm: "削除する",
+    approveReviewerTitle: "承認者名を入力してください",
+    approveReviewerHelp: "レビュー待ちのTODOを完了にする承認者名を記録します。",
+    approveReviewerPlaceholder: "例: reviewer",
+    approveReviewerConfirm: "承認して完了",
+    approveReviewerRequired: "承認者名は必須です",
     modelLabelJp: "日本語",
     modelLabelEn: "English",
     themeSwitch: "テーマ切替",
@@ -290,6 +372,60 @@ const I18N = {
     bulkUploadStarted: "Starting bulk upload...",
     chatStatusThinking: "✍️ Generating answer...",
     chatStatusSearching: "🔍 Searching context: {query}",
+    todoOpenList: "Open list",
+    todoStatusDraft: "Draft",
+    todoStatusInProgress: "In Progress",
+    todoStatusReviewRequired: "Review Required",
+    todoStatusDone: "Done",
+    todoSummaryEmpty: "No TODOs in this chat yet",
+    todoSummaryCount: "TODOs in this chat: {count}",
+    todoSummaryLoadFailed: "Failed to load TODOs",
+    todoPreviewGeneratingTitle: "Generating TODO draft...",
+    todoPreviewGeneratingNote: "Building a TODO template from this answer.",
+    todoPreviewConfirmTitle: "Create this TODO? Edit if needed.",
+    todoPreviewConfirmButton: "Create this TODO",
+    todoTitleRequired: "Title is required",
+    todoCreated: "TODO created",
+    todoActionFailed: "{action} failed: {message}",
+    todoActionCreate: "TODO creation",
+    todoActionPreview: "TODO draft generation",
+    todoActionSave: "TODO save",
+    todoActionApprove: "Approval",
+    todoActionDraft: "AI draft generation",
+    todoFieldTitle: "Title",
+    todoFieldDescription: "Description",
+    todoFieldAcceptance: "Acceptance Criteria",
+    todoFieldStatus: "Status",
+    todoSave: "Save",
+    todoSaveDone: "Saved",
+    todoApproveDoneButton: "Approve and Complete",
+    todoApproveDone: "Approved and completed",
+    todoApproveHintReady: "This TODO is review-required and can be approved now.",
+    todoApproveHintNeedReview: "Approval is enabled after saving status as Review Required.",
+    todoDraftButton: "Generate AI Draft",
+    todoDraftGenerated: "AI draft generated",
+    todoDraftModalProgressTitle: "Generating AI draft...",
+    todoDraftModalResultTitle: "AI draft generated",
+    todoDraftModalErrorTitle: "Failed to generate AI draft",
+    todoDraftModalContextTitle: "Generating draft from this TODO context",
+    todoDraftModalResultBody: "A draft based on this TODO has been added to chat.",
+    todoOverlayClose: "Close",
+    todoOverlayGenerating: "Generating...",
+    todoRelatedMessageCount: "Related messages: {count}",
+    todoDraftMessageIds: "Drafts: {ids}",
+    todoNone: "None",
+    todoSummaryBreakdown: "Draft {draft} / In Progress {inProgress} / Review Required {reviewRequired} / Done {done}",
+    historyTodoBadge: "TODO {count}",
+    deleteSessionTodoTitle: "Delete a session with TODOs?",
+    deleteSessionTodoMessage: "This chat has {count} TODOs. Deleting it will also remove related TODOs and logs.",
+    deleteSessionTodoBreakdown: "Status breakdown: {summary}",
+    deleteSessionTodoItems: "Affected TODOs",
+    deleteSessionConfirm: "Delete",
+    approveReviewerTitle: "Enter approver name",
+    approveReviewerHelp: "The approver name will be recorded when completing this review-required TODO.",
+    approveReviewerPlaceholder: "e.g. reviewer",
+    approveReviewerConfirm: "Approve and Complete",
+    approveReviewerRequired: "Approver name is required",
     modelLabelJp: "Japanese",
     modelLabelEn: "English",
     themeSwitch: "Toggle theme",
@@ -383,6 +519,85 @@ function getFileGroupLabel(groupKey) {
   return map[groupKey] || groupKey;
 }
 
+function getTodoStatusLabel(status) {
+  const map = {
+    draft: t("todoStatusDraft"),
+    in_progress: t("todoStatusInProgress"),
+    review_required: t("todoStatusReviewRequired"),
+    done: t("todoStatusDone"),
+  };
+  return map[status] || status;
+}
+
+function getTodoStatusOptions(selected) {
+  return [
+    { value: "draft", label: t("todoStatusDraft") },
+    { value: "in_progress", label: t("todoStatusInProgress") },
+    { value: "review_required", label: t("todoStatusReviewRequired") },
+  ]
+    .map((option) => {
+      const selectedAttr = option.value === selected ? "selected" : "";
+      return `<option value="${option.value}" ${selectedAttr}>${escapeHtml(option.label)}</option>`;
+    })
+    .join("");
+}
+
+function summarizeTodoStatuses(todos) {
+  const counts = { draft: 0, in_progress: 0, review_required: 0, done: 0 };
+  for (const todo of todos || []) {
+    if (counts[todo.status] != null) counts[todo.status] += 1;
+  }
+  return counts;
+}
+
+function formatTodoStatusBreakdown(counts) {
+  return t("todoSummaryBreakdown", {
+    draft: counts.draft || 0,
+    inProgress: counts.in_progress || 0,
+    reviewRequired: counts.review_required || 0,
+    done: counts.done || 0,
+  });
+}
+
+const TODO_STATUS_META = [
+  { key: "draft",           label: { ja: "下書き",       en: "Draft"   },           cssClass: "status-draft"           },
+  { key: "in_progress",     label: { ja: "対応中",       en: "In Progress" },       cssClass: "status-in_progress"     },
+  { key: "review_required", label: { ja: "レビュー待ち", en: "Review Req." },       cssClass: "status-review_required" },
+  { key: "done",            label: { ja: "完了",         en: "Done"    },           cssClass: "status-done"            },
+];
+
+function renderTodoSummaryBadges(counts) {
+  if (!todoSummaryBadges) return;
+  const total = Object.values(counts).reduce((s, n) => s + n, 0);
+  if (total === 0) {
+    todoSummaryBadges.innerHTML = `<span class="todo-summary-empty">${escapeHtml(t("todoSummaryEmpty"))}</span>`;
+    return;
+  }
+  const lang = currentLang === "ja" ? "ja" : "en";
+  todoSummaryBadges.innerHTML = TODO_STATUS_META
+    .filter((m) => counts[m.key] > 0)
+    .map((m) => `<span class="todo-stat-pill ${m.cssClass}">${escapeHtml(m.label[lang])} ${counts[m.key]}</span>`)
+    .join("");
+}
+
+function setTodoOverlayConfirmAction(action = null, label = "") {
+  todoOverlayConfirmAction = action;
+  if (!todoPreviewConfirmBtn) return;
+  if (!action) {
+    todoPreviewConfirmBtn.hidden = true;
+    todoPreviewConfirmBtn.disabled = false;
+    return;
+  }
+  todoPreviewConfirmBtn.hidden = false;
+  todoPreviewConfirmBtn.disabled = false;
+  todoPreviewConfirmBtn.textContent = label;
+}
+
+async function handleTodoOverlayConfirm() {
+  if (typeof todoOverlayConfirmAction !== "function") return;
+  await todoOverlayConfirmAction();
+}
+
 function applyStaticTranslations() {
   const setText = (id, value) => {
     const el = document.getElementById(id);
@@ -455,6 +670,9 @@ function applyStaticTranslations() {
     if (contentTypeFilter.options[3]) contentTypeFilter.options[3].textContent = t("typeImage");
     if (contentTypeFilter.options[4]) contentTypeFilter.options[4].textContent = t("typeVisualPage");
   }
+  if (todoOpenBtn) todoOpenBtn.textContent = t("todoOpenList");
+  if (todoDrawerCloseBtn) todoDrawerCloseBtn.textContent = t("todoOverlayClose");
+  if (todoPreviewCancelBtn) todoPreviewCancelBtn.textContent = t("cancel");
 }
 
 function applyTheme(nextTheme, persist = true) {
@@ -527,6 +745,33 @@ function setInputEnabled(enabled) {
   inputEl.disabled = !enabled;
   sendBtn.disabled = !enabled || !inputEl.value.trim();
   isStreaming = !enabled;
+}
+
+// アップロード中の UI 制御ヘルパー
+function setUploadUIEnabled(enabled) {
+  isUploading = !enabled;
+  // メッセージ送信
+  inputEl.disabled = !enabled;
+  sendBtn.disabled = !enabled;
+  // フィルタ・モデル選択
+  premiumToggle.disabled = !enabled;
+  reasoningModeToggle.disabled = !enabled;
+  wingFilter?.disabled ? (wingFilter.disabled = !enabled) : null;
+  roomFilter?.disabled ? (roomFilter.disabled = !enabled) : null;
+  contentTypeFilter?.disabled ? (contentTypeFilter.disabled = !enabled) : null;
+  modelSelect.disabled = !enabled;
+  // プロジェクト管理
+  uploadProjectSelect.disabled = !enabled;
+  addProjectBtn.disabled = !enabled;
+  bulkUploadBtn.disabled = !enabled;
+  // 仕様書削除ボタン（全て無効化）
+  document.querySelectorAll(".doc-del").forEach(el => {
+    el.disabled = !enabled;
+    el.style.pointerEvents = !enabled ? "none" : "auto";
+  });
+  // ファイルアップロード
+  fileInput.disabled = !enabled;
+  uploadArea.disabled = !enabled;
 }
 
 async function copyTextSafely(text) {
@@ -689,13 +934,20 @@ function initSidebarUi() {
 // ====================================================
 
 function initSectionToggle(toggleBtn, bodyEl) {
+  const syncExpandedState = (expanded) => {
+    toggleBtn.setAttribute("aria-expanded", String(expanded));
+    bodyEl.hidden = !expanded;
+  };
+
+  syncExpandedState(toggleBtn.getAttribute("aria-expanded") === "true");
+
   toggleBtn.addEventListener("click", () => {
     if (sidebarCollapsed) {
       setSidebarCollapsed(false);
       return;
     }
     const expanded = toggleBtn.getAttribute("aria-expanded") === "true";
-    toggleBtn.setAttribute("aria-expanded", String(!expanded));
+    syncExpandedState(!expanded);
   });
 }
 
@@ -775,29 +1027,55 @@ async function loadRetrievalLogs(sessionId) {
 // ====================================================
 
 async function loadModels() {
+  const requestSeq = ++modelLoadRequestSeq;
+
   try {
+    // 「読み込み中...」状態を表示
+    modelSelect.innerHTML = `<option value="" disabled selected>${t("modelLoading")}</option>`;
+    modelSelect.disabled = true;
+    if (premiumToggle) premiumToggle.disabled = true;
+
     const usePremium = premiumToggle ? premiumToggle.checked : true;
     const url = usePremium ? "/api/models" : "/api/models?premium=false";
     const res = await fetch(url);
     if (!res.ok) throw new Error(res.statusText);
     const models = await res.json();
+    if (requestSeq !== modelLoadRequestSeq) return;
+
     modelSelect.innerHTML = "";
+    let selectedFound = false;
     for (const m of models) {
       const opt = document.createElement("option");
       opt.value = m.id;
       opt.textContent = m.id;
       // claude-sonnet-4.5 をデフォルト選択
-      if (m.id === "claude-sonnet-4.5") opt.selected = true;
+      if (m.id === "claude-sonnet-4.5") {
+        opt.selected = true;
+        selectedFound = true;
+      }
       modelSelect.appendChild(opt);
+    }
+    // デフォルトモデルが利用不可の場合、最初のモデルを選択
+    if (!selectedFound && models.length > 0) {
+      modelSelect.children[0].selected = true;
     }
     if (models.length === 0) throw new Error(t("modelFetchZero"));
   } catch (e) {
+    // 古いリクエストの失敗結果は画面に反映しない
+    if (requestSeq !== modelLoadRequestSeq) return;
+
     console.warn(t("modelFetchFallback"), e);
     modelSelect.innerHTML = `
       <option value="claude-sonnet-4.5" selected>claude-sonnet-4.5</option>
       <option value="claude-opus-4.5">claude-opus-4.5</option>
       <option value="gpt-4.1">gpt-4.1</option>
     `;
+  } finally {
+    if (requestSeq === modelLoadRequestSeq) {
+      modelSelect.disabled = false;
+      // アップロード中に入った場合は無効状態を維持する
+      if (premiumToggle) premiumToggle.disabled = isUploading;
+    }
   }
 }
 
@@ -805,9 +1083,12 @@ async function loadModels() {
 // メッセージ描画
 // ====================================================
 
-function appendMessage(role, contentOrEl) {
+function appendMessage(role, contentOrEl, options = {}) {
   const msg = document.createElement("div");
   msg.className = `msg ${role}`;
+  if (options.messageId != null) {
+    msg.dataset.messageId = String(options.messageId);
+  }
 
   const avatar = document.createElement("div");
   avatar.className = "msg-avatar";
@@ -826,6 +1107,20 @@ function appendMessage(role, contentOrEl) {
     }
   } else {
     bubble.appendChild(contentOrEl);
+  }
+
+  if (role === "assistant" && options.messageId != null && currentSessionId) {
+    const actionBar = document.createElement("div");
+    actionBar.className = "msg-action-bar";
+    const todoBtn = document.createElement("button");
+    todoBtn.type = "button";
+    todoBtn.className = "msg-todo-btn";
+    todoBtn.textContent = "TODO化";
+    todoBtn.addEventListener("click", async () => {
+      await createTodoFromAnswer(options.messageId);
+    });
+    actionBar.appendChild(todoBtn);
+    bubble.appendChild(actionBar);
   }
 
   msg.appendChild(avatar);
@@ -957,8 +1252,8 @@ async function sendMessage() {
           showToast(t("chatError", { message: ev.message }), "error");
         } else if (ev.type === "done") {
           if (!currentSessionId) currentSessionId = ev.session_id;
+          await loadSession(currentSessionId, sessionTitle.textContent || t("newChat"));
           await loadHistory();
-          await loadRetrievalLogs(currentSessionId);
         }
       }
     }
@@ -980,6 +1275,458 @@ async function sendMessage() {
     clearStatus();
     setInputEnabled(true);
     inputEl.focus();
+  }
+}
+
+function openTodoDrawer() {
+  if (!todoDrawerBackdrop) return;
+  todoDrawerBackdrop.hidden = false;
+  document.body.classList.add("todo-drawer-open");
+}
+
+function closeTodoDrawer() {
+  if (!todoDrawerBackdrop) return;
+  todoDrawerBackdrop.hidden = true;
+  document.body.classList.remove("todo-drawer-open");
+}
+
+function closeTodoDetail() {
+  currentTodoId = null;
+  currentTodoDetailData = null;
+  renderTodoList(currentTodos);
+  if (todoDetail) {
+    todoDetail.hidden = true;
+    todoDetail.innerHTML = "";
+  }
+  if (todoDetailEmpty) todoDetailEmpty.hidden = false;
+}
+
+function closeTodoPreview() {
+  currentTodoPreviewMessageId = null;
+  todoOverlayConfirmAction = null;
+  if (todoPreviewOverlay) todoPreviewOverlay.hidden = true;
+  document.body.classList.remove("todo-preview-open");
+  if (todoPreviewBody) {
+    todoPreviewBody.innerHTML = `
+      <div class="todo-preview-loading">
+        <div class="upload-modal-spinner" aria-hidden="true"></div>
+        <div class="todo-preview-note">${escapeHtml(t("todoPreviewGeneratingNote"))}</div>
+      </div>
+    `;
+  }
+  if (todoPreviewTitle) todoPreviewTitle.textContent = t("todoPreviewGeneratingTitle");
+  setTodoOverlayConfirmAction(null);
+  if (todoPreviewCancelBtn) {
+    todoPreviewCancelBtn.disabled = false;
+    todoPreviewCancelBtn.textContent = t("cancel");
+  }
+}
+
+function showTodoPreviewLoading() {
+  if (!todoPreviewOverlay) return;
+  todoPreviewOverlay.hidden = false;
+  document.body.classList.add("todo-preview-open");
+  if (todoPreviewTitle) todoPreviewTitle.textContent = t("todoPreviewGeneratingTitle");
+  if (todoPreviewBody) {
+    todoPreviewBody.innerHTML = `
+      <div class="todo-preview-loading">
+        <div class="upload-modal-spinner" aria-hidden="true"></div>
+        <div class="todo-preview-note">${escapeHtml(t("todoPreviewGeneratingNote"))}</div>
+      </div>
+    `;
+  }
+  setTodoOverlayConfirmAction(null);
+  if (todoPreviewCancelBtn) {
+    todoPreviewCancelBtn.disabled = false;
+    todoPreviewCancelBtn.textContent = t("cancel");
+  }
+}
+
+function showTodoPreviewForm(preview) {
+  if (!todoPreviewBody || !todoPreviewTitle || !todoPreviewConfirmBtn) return;
+  todoPreviewTitle.textContent = t("todoPreviewConfirmTitle");
+  todoPreviewBody.innerHTML = `
+    <div class="todo-preview-form">
+      <label>
+        ${escapeHtml(t("todoFieldTitle"))}
+        <input id="todoPreviewTitleInput" class="todo-select" value="${escapeHtml(preview.title || "")}" />
+      </label>
+      <label>
+        ${escapeHtml(t("todoFieldDescription"))}
+        <textarea id="todoPreviewDescriptionInput" class="todo-textarea">${escapeHtml(preview.description || "")}</textarea>
+      </label>
+      <label>
+        ${escapeHtml(t("todoFieldAcceptance"))}
+        <textarea id="todoPreviewAcceptanceInput" class="todo-textarea">${escapeHtml(preview.acceptance_criteria || "")}</textarea>
+      </label>
+    </div>
+  `;
+  setTodoOverlayConfirmAction(submitTodoPreview, t("todoPreviewConfirmButton"));
+}
+
+function showTodoDraftProgressModal({ title, description, acceptanceCriteria, relatedCount }) {
+  if (!todoPreviewOverlay || !todoPreviewTitle || !todoPreviewBody) return;
+  todoPreviewOverlay.hidden = false;
+  document.body.classList.add("todo-preview-open");
+  todoPreviewTitle.textContent = t("todoDraftModalProgressTitle");
+  todoPreviewBody.innerHTML = `
+    <div class="todo-preview-form">
+      <div class="todo-preview-note">${escapeHtml(t("todoDraftModalContextTitle"))}</div>
+      <label>
+        ${escapeHtml(t("todoFieldTitle"))}
+        <input class="todo-select" value="${escapeHtml(title || "")}" disabled />
+      </label>
+      <label>
+        ${escapeHtml(t("todoFieldDescription"))}
+        <textarea class="todo-textarea" disabled>${escapeHtml(description || "")}</textarea>
+      </label>
+      <label>
+        ${escapeHtml(t("todoFieldAcceptance"))}
+        <textarea class="todo-textarea" disabled>${escapeHtml(acceptanceCriteria || "")}</textarea>
+      </label>
+      <div class="todo-preview-note">${escapeHtml(t("todoRelatedMessageCount", { count: relatedCount }))}</div>
+      <div class="todo-preview-loading">
+        <div class="upload-modal-spinner" aria-hidden="true"></div>
+        <div class="todo-preview-note">${escapeHtml(t("todoOverlayGenerating"))}</div>
+      </div>
+    </div>
+  `;
+  setTodoOverlayConfirmAction(null);
+  if (todoPreviewCancelBtn) {
+    todoPreviewCancelBtn.disabled = true;
+    todoPreviewCancelBtn.textContent = t("todoOverlayGenerating");
+  }
+}
+
+function showTodoDraftResultModal({ success, message }) {
+  if (!todoPreviewOverlay || !todoPreviewTitle || !todoPreviewBody) return;
+  todoPreviewOverlay.hidden = false;
+  document.body.classList.add("todo-preview-open");
+  todoPreviewTitle.textContent = success ? t("todoDraftModalResultTitle") : t("todoDraftModalErrorTitle");
+  todoPreviewBody.innerHTML = `
+    <div class="todo-preview-form">
+      <div class="todo-preview-note">${escapeHtml(message)}</div>
+    </div>
+  `;
+  setTodoOverlayConfirmAction(null);
+  if (todoPreviewCancelBtn) {
+    todoPreviewCancelBtn.disabled = false;
+    todoPreviewCancelBtn.textContent = t("todoOverlayClose");
+  }
+}
+
+function showTodoApprovalModal(todoId) {
+  if (!todoPreviewOverlay || !todoPreviewTitle || !todoPreviewBody) return;
+  todoPreviewOverlay.hidden = false;
+  document.body.classList.add("todo-preview-open");
+  todoPreviewTitle.textContent = t("approveReviewerTitle");
+  todoPreviewBody.innerHTML = `
+    <div class="todo-preview-form">
+      <div class="todo-preview-note">${escapeHtml(t("approveReviewerHelp"))}</div>
+      <label>
+        ${escapeHtml(t("approveReviewerTitle"))}
+        <input id="todoApproveReviewerInput" class="todo-select" placeholder="${escapeHtml(t("approveReviewerPlaceholder"))}" value="reviewer" />
+      </label>
+    </div>
+  `;
+  setTodoOverlayConfirmAction(async () => {
+    const reviewer = document.getElementById("todoApproveReviewerInput")?.value?.trim() || "";
+    if (!reviewer) {
+      showToast(t("approveReviewerRequired"), "error");
+      return;
+    }
+
+    if (todoPreviewConfirmBtn) todoPreviewConfirmBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/history/${currentSessionId}/todos/${todoId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved_by: reviewer }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || res.statusText);
+      closeTodoPreview();
+      await loadTodos(currentSessionId);
+      await openTodoDetail(todoId);
+      showToast(t("todoApproveDone"), "success");
+    } catch (e) {
+      if (todoPreviewConfirmBtn) todoPreviewConfirmBtn.disabled = false;
+      showToast(t("todoActionFailed", { action: t("todoActionApprove"), message: e.message }), "error");
+    }
+  }, t("approveReviewerConfirm"));
+  if (todoPreviewCancelBtn) {
+    todoPreviewCancelBtn.disabled = false;
+    todoPreviewCancelBtn.textContent = t("cancel");
+  }
+}
+
+async function confirmDeleteSession(session) {
+  if (!session?.todo_count) {
+    await deleteSession(session.id, { bypassModal: true });
+    return;
+  }
+
+  const res = await fetch(`/api/history/${session.id}/todos`);
+  const todos = res.ok ? await res.json() : [];
+  const counts = summarizeTodoStatuses(todos);
+  const titles = todos.slice(0, 5).map((todo) => `<li>${escapeHtml(todo.title)}</li>`).join("");
+
+  if (!todoPreviewOverlay || !todoPreviewTitle || !todoPreviewBody) return;
+  todoPreviewOverlay.hidden = false;
+  document.body.classList.add("todo-preview-open");
+  todoPreviewTitle.textContent = t("deleteSessionTodoTitle");
+  todoPreviewBody.innerHTML = `
+    <div class="todo-preview-form">
+      <div class="todo-preview-note">${escapeHtml(t("deleteSessionTodoMessage", { count: session.todo_count }))}</div>
+      <div class="todo-preview-note">${escapeHtml(t("deleteSessionTodoBreakdown", { summary: formatTodoStatusBreakdown(counts) }))}</div>
+      <div class="todo-preview-note">${escapeHtml(t("deleteSessionTodoItems"))}</div>
+      <ul class="todo-preview-list">${titles || `<li>${escapeHtml(t("todoNone"))}</li>`}</ul>
+    </div>
+  `;
+  setTodoOverlayConfirmAction(async () => {
+    if (todoPreviewConfirmBtn) todoPreviewConfirmBtn.disabled = true;
+    await deleteSession(session.id, { bypassModal: true });
+    closeTodoPreview();
+  }, t("deleteSessionConfirm"));
+  if (todoPreviewCancelBtn) {
+    todoPreviewCancelBtn.disabled = false;
+    todoPreviewCancelBtn.textContent = t("cancel");
+  }
+}
+
+async function submitTodoPreview() {
+  if (!currentSessionId || currentTodoPreviewMessageId == null) return;
+  const title = document.getElementById("todoPreviewTitleInput")?.value?.trim() || "";
+  const description = document.getElementById("todoPreviewDescriptionInput")?.value || "";
+  const acceptance = document.getElementById("todoPreviewAcceptanceInput")?.value || "";
+  if (!title) {
+    showToast(t("todoTitleRequired"), "error");
+    return;
+  }
+
+  if (todoPreviewConfirmBtn) todoPreviewConfirmBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/history/${currentSessionId}/todos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        description,
+        acceptance_criteria: acceptance,
+        created_from_message_id: Number(currentTodoPreviewMessageId),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+
+    closeTodoPreview();
+    await loadTodos(currentSessionId);
+    await loadHistory();
+    openTodoDrawer();
+    await openTodoDetail(data.id);
+    showToast(t("todoCreated"), "success");
+  } catch (e) {
+    if (todoPreviewConfirmBtn) todoPreviewConfirmBtn.disabled = false;
+    showToast(t("todoActionFailed", { action: t("todoActionCreate"), message: e.message }), "error");
+  }
+}
+
+async function createTodoFromAnswer(messageId) {
+  if (!currentSessionId) return;
+  currentTodoPreviewMessageId = Number(messageId);
+  showTodoPreviewLoading();
+
+  try {
+    const res = await fetch(`/api/history/${currentSessionId}/todos/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_id: Number(messageId), model: modelSelect?.value || "claude-sonnet-4.5" }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    showTodoPreviewForm(data);
+  } catch (e) {
+    closeTodoPreview();
+    showToast(t("todoActionFailed", { action: t("todoActionPreview"), message: e.message }), "error");
+  }
+}
+
+function renderTodoList(items) {
+  if (!todoList) return;
+  currentTodos = items || [];
+
+  if (!currentTodos.length) {
+    todoList.innerHTML = '<div class="todo-empty">TODOはまだありません</div>';
+    return;
+  }
+
+  todoList.innerHTML = currentTodos
+    .map((todo) => {
+      const active = currentTodoId === todo.id ? " active" : "";
+      return `
+        <button type="button" class="todo-item${active}" data-todo-id="${todo.id}" data-session-id="${escapeHtml(todo.session_id)}">
+          <span class="todo-item-title">${escapeHtml(todo.title)}</span>
+          <span class="todo-item-status status-${todo.status}">${escapeHtml(getTodoStatusLabel(todo.status))}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  todoList.querySelectorAll(".todo-item").forEach((el) => {
+    el.addEventListener("click", async () => {
+      const id = Number(el.dataset.todoId);
+      await openTodoDetail(id);
+    });
+  });
+}
+
+async function loadTodos(sessionId) {
+  if (!todoWorkflow || !todoList) return;
+  if (!sessionId) {
+    todoWorkflow.hidden = true;
+    renderTodoList([]);
+    closeTodoDetail();
+    closeTodoDrawer();
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/history/${sessionId}/todos`);
+    if (!res.ok) throw new Error(res.statusText);
+    const items = await res.json();
+    todoWorkflow.hidden = false;
+    const counts = summarizeTodoStatuses(items);
+    renderTodoSummaryBadges(counts);
+    if (todoOpenBtn) todoOpenBtn.disabled = items.length === 0;
+    renderTodoList(items);
+  } catch (e) {
+    todoWorkflow.hidden = false;
+    renderTodoSummaryBadges({ draft: 0, in_progress: 0, review_required: 0, done: 0 });
+    if (todoOpenBtn) todoOpenBtn.disabled = true;
+    todoList.innerHTML = `<div class="todo-empty" style="color:var(--danger)">TODO取得失敗: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function openTodoDetail(todoId) {
+  if (!currentSessionId || !todoDetail || !todoDetailEmpty) return;
+
+  try {
+    const res = await fetch(`/api/history/${currentSessionId}/todos/${todoId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+
+    currentTodoDetailData = data;
+    currentTodoId = todoId;
+    renderTodoList(currentTodos);
+    openTodoDrawer();
+
+    const todo = data.item;
+    const relatedMessages = (data.links || []).filter((l) => l.link_type === "message" && l.message_id != null);
+    const relatedDrafts = (data.links || []).filter((l) => l.link_type === "draft" && l.message_id != null);
+
+    todoDetailEmpty.hidden = true;
+    todoDetail.hidden = false;
+    todoDetail.innerHTML = `
+      <div class="todo-detail-head">
+        <h4>${escapeHtml(todo.title)}</h4>
+        <div class="todo-detail-meta">
+          <span class="todo-item-status status-${todo.status}">${escapeHtml(getTodoStatusLabel(todo.status))}</span>
+          <button id="todoDetailCloseBtn" class="todo-detail-close" type="button">閉じる</button>
+        </div>
+      </div>
+      <label>${escapeHtml(t("todoFieldDescription"))}</label>
+      <textarea id="todoDescriptionInput" class="todo-textarea">${escapeHtml(todo.description || "")}</textarea>
+      <label>${escapeHtml(t("todoFieldAcceptance"))}</label>
+      <textarea id="todoAcceptanceInput" class="todo-textarea">${escapeHtml(todo.acceptance_criteria || "")}</textarea>
+      <label>${escapeHtml(t("todoFieldStatus"))}</label>
+      <select id="todoStatusSelect" class="todo-select">
+        ${getTodoStatusOptions(todo.status)}
+      </select>
+      <div class="todo-detail-actions">
+        <button id="todoDraftBtn" type="button">${escapeHtml(t("todoDraftButton"))}</button>
+        ${todo.status === "review_required" ? `<button id="todoApproveBtn" type="button">${escapeHtml(t("todoApproveDoneButton"))}</button>` : ""}
+        <button id="todoSaveBtn" class="todo-action-save" type="button">${escapeHtml(t("todoSave"))}</button>
+      </div>
+      <div class="todo-approve-hint ${todo.status === "review_required" ? "is-ready" : ""}">${escapeHtml(todo.status === "review_required" ? t("todoApproveHintReady") : t("todoApproveHintNeedReview"))}</div>
+      <div class="todo-links">
+        <div class="todo-links-title">${escapeHtml(t("todoRelatedMessageCount", { count: relatedMessages.length }))}</div>
+        <div class="todo-links-title">${escapeHtml(t("todoDraftMessageIds", { ids: relatedDrafts.map((d) => d.message_id).join(", ") || t("todoNone") }))}</div>
+      </div>
+    `;
+
+    document.getElementById("todoDetailCloseBtn")?.addEventListener("click", closeTodoDetail);
+    document.getElementById("todoSaveBtn")?.addEventListener("click", async () => {
+      await updateTodo(todo.id);
+    });
+    document.getElementById("todoApproveBtn")?.addEventListener("click", async () => {
+      await approveTodo(todo.id);
+    });
+    document.getElementById("todoDraftBtn")?.addEventListener("click", async () => {
+      await generateTodoDraft(todo.id);
+    });
+  } catch (e) {
+    currentTodoDetailData = null;
+    todoDetailEmpty.hidden = false;
+    todoDetail.hidden = true;
+    showToast(`TODO詳細取得失敗: ${e.message}`, "error");
+  }
+}
+
+async function updateTodo(todoId) {
+  const description = document.getElementById("todoDescriptionInput")?.value || "";
+  const acceptance = document.getElementById("todoAcceptanceInput")?.value || "";
+  const status = document.getElementById("todoStatusSelect")?.value || "draft";
+
+  const res = await fetch(`/api/history/${currentSessionId}/todos/${todoId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description, acceptance_criteria: acceptance, status }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    showToast(t("todoActionFailed", { action: t("todoActionSave"), message: data.detail || res.statusText }), "error");
+    return;
+  }
+  await loadTodos(currentSessionId);
+  await openTodoDetail(todoId);
+  showToast(t("todoSaveDone"), "success");
+}
+
+async function approveTodo(todoId) {
+  showTodoApprovalModal(todoId);
+}
+
+async function generateTodoDraft(todoId) {
+  if (!currentSessionId) return;
+  const title = currentTodoDetailData?.item?.title || "";
+  const description = document.getElementById("todoDescriptionInput")?.value || currentTodoDetailData?.item?.description || "";
+  const acceptanceCriteria = document.getElementById("todoAcceptanceInput")?.value || currentTodoDetailData?.item?.acceptance_criteria || "";
+  const relatedCount = (currentTodoDetailData?.links || []).filter((item) => item.link_type === "message").length;
+
+  closeTodoDrawer();
+  showTodoDraftProgressModal({ title, description, acceptanceCriteria, relatedCount });
+
+  const model = modelSelect?.value || "claude-sonnet-4.5";
+  try {
+    const res = await fetch(`/api/history/${currentSessionId}/todos/${todoId}/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || res.statusText);
+    }
+
+    await Promise.all([
+      loadTodos(currentSessionId),
+      loadSession(currentSessionId, sessionTitle.textContent || t("newChat")),
+    ]);
+    showTodoDraftResultModal({ success: true, message: t("todoDraftModalResultBody") });
+    showToast(t("todoDraftGenerated"), "success");
+  } catch (e) {
+    showTodoDraftResultModal({ success: false, message: e.message });
+    showToast(t("todoActionFailed", { action: t("todoActionDraft"), message: e.message }), "error");
   }
 }
 
@@ -1088,6 +1835,7 @@ async function moveDocumentToProject(docId, project) {
 }
 
 function renderHistoryList(sessions) {
+  currentHistorySessions = sessions || [];
   historyList.innerHTML = "";
   historyBadge.textContent = sessions.length;
   for (const s of sessions) {
@@ -1099,16 +1847,25 @@ function renderHistoryList(sessions) {
     titleEl.className = "h-title";
     titleEl.textContent = s.title;
 
+    const todoBadge = document.createElement("span");
+    if (s.todo_count > 0) {
+      todoBadge.className = "h-todo-badge doc-count-badge";
+      todoBadge.textContent = `${s.todo_count}件`;
+    } else {
+      todoBadge.className = "h-todo-badge";
+    }
+
     const delBtn = document.createElement("button");
     delBtn.className = "h-del";
     delBtn.title = t("docDeleteTitle");
     delBtn.innerHTML = "✕";
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      deleteSession(s.id);
+      confirmDeleteSession(s);
     });
 
     item.appendChild(titleEl);
+    item.appendChild(todoBadge);
     item.appendChild(delBtn);
     item.addEventListener("click", () => loadSession(s.id, s.title));
     historyList.appendChild(item);
@@ -1129,16 +1886,19 @@ async function loadSession(sessionId, title) {
     messagesEl.innerHTML = "";
 
     for (const m of msgs) {
-      appendMessage(m.role, m.content);
+      appendMessage(m.role, m.content, { messageId: m.id });
     }
-    await loadRetrievalLogs(sessionId);
+    await Promise.all([
+      loadRetrievalLogs(sessionId),
+      loadTodos(sessionId),
+    ]);
     renderHistoryList(await (await fetch("/api/history")).json());
   } catch (e) {
     showToast(t("sessionLoadFailed", { message: e.message }), "error");
   }
 }
 
-async function deleteSession(sessionId) {
+async function deleteSession(sessionId, options = {}) {
   try {
     await fetch(`/api/history/${sessionId}`, { method: "DELETE" });
     if (currentSessionId === sessionId) startNewChat();
@@ -1163,12 +1923,18 @@ async function deleteProject(projectId, projectName) {
 
 function startNewChat() {
   currentSessionId = null;
+  currentTodoId = null;
+  currentTodos = [];
   sessionTitle.textContent = t("newChat");
   messagesEl.innerHTML = "";
   messagesEl.style.display = "none";
   welcomeEl.style.display = "flex";
   inputEl.value = "";
   if (retrievalPanel) retrievalPanel.hidden = true;
+  if (todoWorkflow) todoWorkflow.hidden = true;
+  closeTodoDetail();
+  closeTodoDrawer();
+  closeTodoPreview();
   document.querySelectorAll(".history-item").forEach(el => el.classList.remove("active"));
 }
 
@@ -1444,14 +2210,23 @@ async function uploadFiles(files) {
   const fileArray = Array.from(files || []);
   if (fileArray.length === 0) return;
 
-  uploadProgress.style.display = "block";
-  uploadBar.value = 0;
-  uploadStatus.textContent = "";
+  // モーダル初期化
+  uploadModalOverlay.removeAttribute("hidden");
+  uploadModalTitle.textContent = "アップロード中...";
+  uploadModalBar.value = 0;
+  uploadModalPercent.textContent = "0%";
+  uploadModalStatus.textContent = "";
 
-  for (let i = 0; i < fileArray.length; i++) {
+  // アップロード開始時に UI を無効化
+  setUploadUIEnabled(false);
+
+  let cancelled = false;
+  uploadModalCancelBtn.onclick = () => { cancelled = true; };
+
+  for (let i = 0; i < fileArray.length && !cancelled; i++) {
     const file = fileArray[i];
     const project = uploadProjectSelect?.value || "";
-    uploadStatus.textContent = `${i + 1}/${fileArray.length}: ${file.name}`;
+    uploadModalStatus.textContent = `${i + 1}/${fileArray.length}: ${file.name}`;
     const formData = new FormData();
     formData.append("file", file);
     formData.append("project", project);
@@ -1468,29 +2243,45 @@ async function uploadFiles(files) {
       showToast(t("uploadFailedItem", { name: file.name, message: e.message }), "error");
     }
 
-    uploadBar.value = Math.round(((i + 1) / fileArray.length) * 100);
+    const progress = Math.round(((i + 1) / fileArray.length) * 100);
+    uploadModalBar.value = progress;
+    uploadModalPercent.textContent = progress + "%";
   }
 
-  uploadStatus.textContent = t("uploadDone");
-  setTimeout(() => { uploadProgress.style.display = "none"; }, 1500);
+  if (cancelled) {
+    showToast(t("uploadCancelled") || "アップロードがキャンセルされました", "info");
+  } else {
+    uploadModalStatus.textContent = t("uploadDone");
+    uploadModalPercent.textContent = "100%";
+  }
+
+  // モーダル閉じるまで待機（1.5秒後に自動閉じる）
+  setTimeout(() => {
+    uploadModalOverlay.setAttribute("hidden", "");
+    uploadProgress.style.display = "none";
+  }, cancelled ? 800 : 1500);
+
+  // アップロード完了時に UI を再有効化
+  setUploadUIEnabled(true);
+  
   await loadDocuments();
 }
 
 async function uploadBulkFromFolder() {
   if (!bulkUploadBtn) return;
-  bulkUploadBtn.disabled = true;
 
-  const bulkProgress = document.getElementById("bulkProgress");
-  const bulkBar = document.getElementById("bulkBar");
-  const bulkStatus = document.getElementById("bulkStatus");
-  const bulkLog = document.getElementById("bulkLog");
+  // モーダル初期化
+  uploadModalOverlay.removeAttribute("hidden");
+  uploadModalTitle.textContent = "フォルダアップロード中...";
+  uploadModalBar.value = 0;
+  uploadModalPercent.textContent = "0%";
+  uploadModalStatus.textContent = "";
 
-  if (bulkProgress) {
-    bulkProgress.style.display = "block";
-    bulkBar.value = 0;
-    bulkStatus.textContent = t("bulkUploadStarted");
-    bulkLog.innerHTML = "";
-  }
+  // アップロード開始時に UI を無効化
+  setUploadUIEnabled(false);
+
+  let cancelled = false;
+  uploadModalCancelBtn.onclick = () => { cancelled = true; };
 
   try {
     const project = uploadProjectSelect?.value || "";
@@ -1510,7 +2301,7 @@ async function uploadBulkFromFolder() {
     let failed = 0;
     let total = 0;
 
-    while (true) {
+    while (true && !cancelled) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -1525,40 +2316,30 @@ async function uploadBulkFromFolder() {
 
         if (ev.type === "start") {
           total = ev.total;
-          if (bulkStatus) bulkStatus.textContent = t("bulkUploadStarted");
+          uploadModalStatus.textContent = t("bulkUploadStarted");
         } else if (ev.type === "file_result") {
           total = ev.total || total;
           if (ev.status === "uploaded") {
             uploaded++;
-            if (bulkLog) {
-              const item = document.createElement("div");
-              item.className = "bulk-log-item success";
-              item.textContent = t("uploadDoneItem", { name: ev.filename, count: ev.drawer_count || 0, overwrite: ev.overwritten_count > 0 ? t("uploadOverwrite", { overwritten: ev.overwritten_count, deleted: 0 }) : "" });
-              bulkLog.appendChild(item);
-            }
           } else {
             failed++;
-            if (bulkLog) {
-              const item = document.createElement("div");
-              item.className = "bulk-log-item error";
-              item.textContent = t("uploadFailedItem", { name: ev.filename, message: ev.reason || "" });
-              bulkLog.appendChild(item);
-            }
           }
-          if (bulkBar && total > 0) {
-            bulkBar.value = Math.round(((uploaded + failed) / total) * 100);
+          const progress = Math.round(((uploaded + failed) / total) * 100);
+          uploadModalBar.value = progress;
+          uploadModalPercent.textContent = progress + "%";
+          uploadModalStatus.textContent = `${uploaded + failed}/${total}: ${ev.filename}`;
+          if (ev.status === "uploaded") {
+            showToast(t("uploadDoneItem", { name: ev.filename, count: ev.drawer_count || 0, overwrite: "" }), "success");
+          } else {
+            showToast(t("uploadFailedItem", { name: ev.filename, message: ev.reason || "" }), "error");
           }
-          if (bulkStatus) bulkStatus.textContent = t("bulkUploadProgress", { index: ev.index, total: ev.total, filename: ev.filename });
-          // ログ末尾を表示
-          if (bulkLog) bulkLog.scrollTop = bulkLog.scrollHeight;
         } else if (ev.type === "done") {
           uploaded = ev.uploaded;
           failed = ev.failed;
           total = ev.total;
-          if (bulkBar) bulkBar.value = 100;
-          if (bulkStatus) {
-            bulkStatus.textContent = t("bulkUploadDone", { uploaded, total, failed });
-          }
+          uploadModalBar.value = 100;
+          uploadModalPercent.textContent = "100%";
+          uploadModalStatus.textContent = t("bulkUploadDone", { uploaded, total, failed });
           showToast(
             t("bulkUploadDone", { uploaded, total, failed }),
             failed > 0 ? "warn" : "success",
@@ -1566,15 +2347,22 @@ async function uploadBulkFromFolder() {
         }
       }
     }
+
+    if (cancelled) {
+      showToast(t("uploadCancelled") || "アップロードがキャンセルされました", "info");
+    }
   } catch (e) {
-    if (bulkStatus) bulkStatus.textContent = t("bulkUploadFailed", { message: e.message });
+    uploadModalStatus.textContent = t("bulkUploadFailed", { message: e.message });
     showToast(t("bulkUploadFailed", { message: e.message }), "error");
   } finally {
-    bulkUploadBtn.disabled = false;
-    await loadDocuments();
+    // モーダル閉じる
     setTimeout(() => {
-      if (bulkProgress) bulkProgress.style.display = "none";
-    }, 3000);
+      uploadModalOverlay.setAttribute("hidden", "");
+    }, cancelled ? 800 : 1500);
+
+    // アップロード完了時に UI を再有効化
+    setUploadUIEnabled(true);
+    await loadDocuments();
   }
 }
 
@@ -1609,9 +2397,22 @@ inputEl.addEventListener("keydown", (e) => {
 
 sendBtn.addEventListener("click", sendMessage);
 newChatBtn.addEventListener("click", startNewChat);
+todoOpenBtn?.addEventListener("click", openTodoDrawer);
+todoDrawerCloseBtn?.addEventListener("click", closeTodoDrawer);
 if (bulkUploadBtn) {
   bulkUploadBtn.addEventListener("click", uploadBulkFromFolder);
 }
+
+todoPreviewCancelBtn?.addEventListener("click", closeTodoPreview);
+todoPreviewConfirmBtn?.addEventListener("click", handleTodoOverlayConfirm);
+
+todoDrawerBackdrop?.addEventListener("click", (e) => {
+  if (e.target === todoDrawerBackdrop) closeTodoDrawer();
+});
+
+todoPreviewOverlay?.addEventListener("click", (e) => {
+  if (e.target === todoPreviewOverlay) closeTodoPreview();
+});
 
 fileInput.addEventListener("change", async (e) => {
   await uploadFiles(e.target.files);
@@ -1660,14 +2461,85 @@ if (projectDialogBackdrop) {
   });
 }
 
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (todoPreviewOverlay && !todoPreviewOverlay.hidden) {
+    closeTodoPreview();
+    return;
+  }
+  if (todoDrawerBackdrop && !todoDrawerBackdrop.hidden) {
+    closeTodoDrawer();
+  }
+});
+
 // ====================================================
 // 初期化
 // ====================================================
+
+// サイドバーのキーボードナビゲーション対応
+function initSidebarKeyboardScroll() {
+  if (!sidebar) return;
+
+  const getScrollTarget = () => {
+    const activeEl = document.activeElement;
+    const candidates = [historyList, docList, historySectionBody, docSectionBody]
+      .filter((el) => el && !el.hidden);
+
+    for (const el of candidates) {
+      const ownerSection = el.closest(".sb-section");
+      const ownerToggle = ownerSection?.querySelector(".sb-section-header");
+      const expanded = ownerToggle?.getAttribute("aria-expanded") !== "false";
+      if (!expanded) continue;
+      if (el.matches(":hover") || (activeEl && el.contains(activeEl))) {
+        return el;
+      }
+    }
+    return historyList || docList || sidebar;
+  };
+
+  sidebar.addEventListener("keydown", (e) => {
+    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT")) {
+      return;
+    }
+
+    const scrollTarget = getScrollTarget();
+    if (!scrollTarget) return;
+    const step = 50; // スクロール量（px）
+    
+    switch(e.key) {
+      case "ArrowUp":
+        scrollTarget.scrollTop -= step;
+        e.preventDefault();
+        break;
+      case "ArrowDown":
+        scrollTarget.scrollTop += step;
+        e.preventDefault();
+        break;
+      case "Home":
+        scrollTarget.scrollTop = 0;
+        e.preventDefault();
+        break;
+      case "End":
+        scrollTarget.scrollTop = scrollTarget.scrollHeight;
+        e.preventDefault();
+        break;
+      case "PageUp":
+        scrollTarget.scrollTop -= scrollTarget.clientHeight;
+        e.preventDefault();
+        break;
+      case "PageDown":
+        scrollTarget.scrollTop += scrollTarget.clientHeight;
+        e.preventDefault();
+        break;
+    }
+  });
+}
 
 (async () => {
   initTheme();
   initLanguage();
   initSidebarUi();
+  initSidebarKeyboardScroll();
   premiumToggle?.addEventListener("change", () => loadModels());
   await Promise.all([loadModels(), loadHistory(), loadProjects(), loadDocuments()]);
   renderContextChips();

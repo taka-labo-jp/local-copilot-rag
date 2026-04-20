@@ -1,6 +1,7 @@
 """GitHub Copilot SDK ラッパー — knowledge_search をカスタムツールとして渡し応答をストリーミング"""
 import asyncio
 import base64
+import json
 import logging
 import mimetypes
 from collections.abc import AsyncGenerator, Callable
@@ -168,15 +169,26 @@ async def list_models(premium: bool | None = None) -> list[dict]:
         result = []
         for m in models:
             billing = getattr(m, "billing", None)
-            cost_multiplier = getattr(billing, "cost_multiplier", 0) if billing else 0
-            if premium is False and cost_multiplier != 0:
+            multiplier = 0.0
+            if billing is not None:
+                # SDKバージョン差分を吸収するため、cost_multiplier / multiplier の両方を見る。
+                raw_multiplier = getattr(billing, "cost_multiplier", None)
+                if raw_multiplier is None:
+                    raw_multiplier = getattr(billing, "multiplier", 0)
+                try:
+                    multiplier = float(raw_multiplier)
+                except (TypeError, ValueError):
+                    multiplier = 0.0
+
+            if premium is False and multiplier != 0:
                 continue
-            if premium is True and cost_multiplier == 0:
+            if premium is True and multiplier == 0:
                 continue
             result.append({
                 "id": m.id,
                 "name": getattr(m, "name", m.id),
-                "billing": {"cost_multiplier": cost_multiplier},
+                # API互換性のため、レスポンスキー名は cost_multiplier を維持する。
+                "billing": {"cost_multiplier": multiplier},
             })
         return result
     except Exception:
@@ -375,6 +387,163 @@ _IMAGE_ANALYSIS_PROMPT = (
     "テキスト、図形、構造、要素間の関係性、色、レイアウトなどを含め、"
     "図の目的や示している情報が伝わるよう日本語で説明してください。"
 )
+
+
+async def generate_basic_design_draft(
+    *,
+    title: str,
+    description: str,
+    acceptance_criteria: str,
+    related_messages: list[str],
+    retrieval_summaries: list[str],
+    palace_path: str,
+    model: str = "claude-sonnet-4.5",
+) -> str:
+    """TODO情報から基本設計書ドラフトを生成して返す。"""
+    prompt = "\n".join(
+        [
+            "以下のTODOに対して、基本設計書ドラフトを日本語で作成してください。",
+            "# TODO",
+            f"- title: {title}",
+            f"- description: {description}",
+            f"- acceptance_criteria: {acceptance_criteria}",
+            "# 関連メッセージ",
+            *(related_messages or ["- なし"]),
+            "# 検索根拠サマリ",
+            *(retrieval_summaries or ["- なし"]),
+            "# 出力フォーマット",
+            "1. 目的",
+            "2. 前提・制約",
+            "3. 機能設計",
+            "4. データ設計",
+            "5. API/インターフェース設計",
+            "6. テスト観点",
+            "7. 残課題",
+            "最後に、参照根拠を箇条書きで記載してください。",
+        ]
+    )
+
+    chunks: list[str] = []
+    async for chunk in generate_stream(
+        prompt=prompt,
+        palace_path=palace_path,
+        model=model,
+        reasoning_mode=True,
+        on_search=None,
+        search_filters=None,
+    ):
+        chunks.append(chunk)
+
+    return "".join(chunks).strip()
+
+
+def _normalize_todo_preview_value(value: Any) -> str:
+    """TODO草案JSONの値を文字列へ正規化する。"""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(str(item).strip() for item in value if str(item).strip()).strip()
+    return str(value).strip()
+
+
+def _parse_todo_preview_payload(raw: str) -> dict[str, str]:
+    """LLMのJSON応答からTODO草案を抽出する。"""
+    payload = raw.strip()
+    if "```json" in payload:
+        payload = payload.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in payload:
+        payload = payload.split("```", 1)[1].split("```", 1)[0].strip()
+
+    data = json.loads(payload)
+    if isinstance(data, list):
+        data = next((item for item in data if isinstance(item, dict)), None)
+
+    if not isinstance(data, dict):
+        raise RuntimeError("TODO草案JSONがobject形式ではありません")
+
+    result = {
+        "title": _normalize_todo_preview_value(data.get("title") or data.get("name")),
+        "description": _normalize_todo_preview_value(
+            data.get("description") or data.get("summary") or data.get("details")
+        ),
+        "acceptance_criteria": _normalize_todo_preview_value(
+            data.get("acceptance_criteria")
+            or data.get("acceptanceCriteria")
+            or data.get("done_definition")
+            or data.get("doneDefinition")
+        ),
+    }
+    if not result["title"]:
+        raise RuntimeError("TODO草案のtitleが空です")
+    return result
+
+
+async def generate_todo_draft_from_answer(
+    *,
+    answer_text: str,
+    model: str = "claude-sonnet-4.5",
+) -> dict[str, str]:
+    """回答本文のみを元にTODO草案を生成して返す。"""
+    client = CopilotClient()
+    session = None
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    prompt = "\n".join(
+        [
+            "次の回答文だけを根拠として、実行しやすいTODO草案を日本語で作成してください。",
+            "回答文にない情報は補わないでください。",
+            "出力はJSONのみで返してください。",
+            '{"title":"20文字前後の短いタイトル","description":"着手内容の要約","acceptance_criteria":"完了条件を箇条書き風に1つの文字列で記載"}',
+            "# 回答文",
+            answer_text,
+        ]
+    )
+
+    try:
+        await client.start()
+        session = await client.create_session(
+            on_permission_request=PermissionHandler.approve_all,
+            model=model,
+            streaming=True,
+            working_directory="/tmp",
+        )
+
+        def on_event(event) -> None:
+            if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
+                delta = getattr(event.data, "delta_content", None) or ""
+                if delta:
+                    loop.call_soon_threadsafe(queue.put_nowait, delta)
+            elif event.type in (SessionEventType.SESSION_IDLE, SessionEventType.SESSION_ERROR):
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        session.on(on_event)
+        await session.send(prompt)
+
+        parts: list[str] = []
+        while True:
+            chunk = await asyncio.wait_for(queue.get(), timeout=120.0)
+            if chunk is None:
+                break
+            parts.append(chunk)
+
+        raw = "".join(parts).strip()
+        if not raw:
+            raise RuntimeError("AIから空のTODO草案が返されました")
+
+        return _parse_todo_preview_payload(raw)
+    except Exception:
+        logger.exception("generate_todo_draft_from_answer failed")
+        raise
+    finally:
+        if session is not None:
+            try:
+                await session.disconnect()
+            except Exception:
+                pass
+        try:
+            await client.stop()
+        except Exception:
+            pass
 
 
 async def analyze_image_with_ai(

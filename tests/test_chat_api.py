@@ -23,6 +23,33 @@ class TestChatHistory:
         assert resp.status_code == 200
         assert resp.json() == []
 
+    def test_history_includes_todo_count(self, app_client):
+        """セッション一覧にTODO件数が含まれる。"""
+
+        async def mock_stream(*args, **kwargs):
+            yield "テスト応答"
+
+        with patch("app.services.llm.generate_stream", side_effect=mock_stream):
+            resp = app_client.post("/api/chat", json={"message": "履歴TODO件数"})
+
+        events = []
+        for line in resp.text.strip().split("\n\n"):
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+        sid = events[0]["session_id"]
+        msgs = app_client.get(f"/api/history/{sid}").json()
+        assistant_msg_id = msgs[1]["id"]
+
+        create_resp = app_client.post(
+            f"/api/history/{sid}/todos",
+            json={"title": "履歴表示TODO", "created_from_message_id": assistant_msg_id},
+        )
+        assert create_resp.status_code == 200
+
+        history = app_client.get("/api/history")
+        assert history.status_code == 200
+        assert history.json()[0]["todo_count"] == 1
+
 
 class TestChatSessionMessages:
     """GET /api/history/{session_id} のテスト。"""
@@ -194,3 +221,183 @@ class TestRetrievalLogs:
 
         logs = app_client.get(f"/api/history/{sid}/retrievals").json()
         assert logs == []
+
+
+class TestSessionTodos:
+    """セッション単位TODO API のテスト。"""
+
+    def _create_session(self, app_client) -> tuple[str, int]:
+        async def mock_stream(*args, **kwargs):
+            yield "ok"
+
+        with patch("app.services.llm.generate_stream", side_effect=mock_stream):
+            resp = app_client.post("/api/chat", json={"message": "TODOテスト"})
+
+        events = []
+        for line in resp.text.strip().split("\n\n"):
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+        session_id = events[0]["session_id"]
+
+        msgs = app_client.get(f"/api/history/{session_id}").json()
+        return session_id, msgs[1]["id"]
+
+    def test_create_and_list_todo(self, app_client):
+        """セッション配下にTODOを作成して一覧取得できる。"""
+        sid, _ = self._create_session(app_client)
+        create_resp = app_client.post(
+            f"/api/history/{sid}/todos",
+            json={"title": "基本設計書の作成", "description": "RAG確認後にドラフト作成"},
+        )
+        assert create_resp.status_code == 200
+        body = create_resp.json()
+        assert body["status"] == "draft"
+        assert body["session_id"] == sid
+
+        list_resp = app_client.get(f"/api/history/{sid}/todos")
+        assert list_resp.status_code == 200
+        items = list_resp.json()
+        assert len(items) == 1
+        assert items[0]["id"] == body["id"]
+
+    def test_preview_and_create_from_answer(self, app_client):
+        """assistant回答からTODO草案を生成して作成できる。"""
+        sid, msg_id = self._create_session(app_client)
+
+        with patch(
+            "app.services.llm.generate_todo_draft_from_answer",
+            new=AsyncMock(
+                return_value={
+                    "title": "API TODO草案",
+                    "description": "回答の要点を整理する",
+                    "acceptance_criteria": "要点がTODOに反映されていること",
+                }
+            ),
+        ):
+            preview_resp = app_client.post(
+                f"/api/history/{sid}/todos/preview",
+                json={"message_id": msg_id, "model": "claude-sonnet-4.5"},
+            )
+
+        assert preview_resp.status_code == 200
+        preview = preview_resp.json()
+        assert preview["title"] == "API TODO草案"
+
+        create_resp = app_client.post(
+            f"/api/history/{sid}/todos",
+            json={
+                "title": preview["title"],
+                "description": preview["description"],
+                "acceptance_criteria": preview["acceptance_criteria"],
+                "created_from_message_id": msg_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        body = create_resp.json()
+        assert body["created_from_message_id"] == msg_id
+
+        detail_resp = app_client.get(f"/api/history/{sid}/todos/{body['id']}")
+        assert detail_resp.status_code == 200
+        links = detail_resp.json()["links"]
+        assert len(links) == 1
+        assert links[0]["link_type"] == "message"
+        assert links[0]["message_id"] == msg_id
+
+    def test_preview_rejects_user_message(self, app_client):
+        """userメッセージはTODO草案生成の対象外。"""
+
+        async def mock_stream(*args, **kwargs):
+            yield "ok"
+
+        with patch("app.services.llm.generate_stream", side_effect=mock_stream):
+            resp = app_client.post("/api/chat", json={"message": "user message only"})
+
+        events = []
+        for line in resp.text.strip().split("\n\n"):
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+        sid = events[0]["session_id"]
+        msgs = app_client.get(f"/api/history/{sid}").json()
+        user_msg_id = msgs[0]["id"]
+
+        preview_resp = app_client.post(
+            f"/api/history/{sid}/todos/preview",
+            json={"message_id": user_msg_id},
+        )
+        assert preview_resp.status_code == 400
+
+    def test_from_chat_create_links(self, app_client):
+        """メッセージ起点TODO作成でリンクが保存される。"""
+        sid, msg_id = self._create_session(app_client)
+
+        resp = app_client.post(
+            f"/api/history/{sid}/todos/from-chat",
+            json={"message_id": msg_id, "title": "チャット起票"},
+        )
+        assert resp.status_code == 200
+        todo_id = resp.json()["id"]
+
+        detail = app_client.get(f"/api/history/{sid}/todos/{todo_id}")
+        assert detail.status_code == 200
+        links = detail.json()["links"]
+        assert any(l["link_type"] == "message" and l["message_id"] == msg_id for l in links)
+
+    def test_update_approve_and_draft_generation(self, app_client):
+        """状態遷移と承認、AIドラフト連携が機能する。"""
+        sid, msg_id = self._create_session(app_client)
+        todo = app_client.post(
+            f"/api/history/{sid}/todos/from-chat",
+            json={"message_id": msg_id, "title": "レビュー待ち"},
+        ).json()
+        tid = todo["id"]
+
+        upd_resp = app_client.patch(
+            f"/api/history/{sid}/todos/{tid}",
+            json={"status": "review_required", "acceptance_criteria": "レビュー済み"},
+        )
+        assert upd_resp.status_code == 200
+        assert upd_resp.json()["status"] == "review_required"
+
+        with patch("app.services.llm.generate_basic_design_draft", new=AsyncMock(return_value="設計ドラフト本文")):
+            draft_resp = app_client.post(
+                f"/api/history/{sid}/todos/{tid}/draft",
+                json={"model": "claude-sonnet-4.5"},
+            )
+        assert draft_resp.status_code == 200
+        assert draft_resp.json()["ai_draft_message_id"] is not None
+
+        approve_resp = app_client.post(
+            f"/api/history/{sid}/todos/{tid}/approve",
+            json={"approved_by": "qa-user"},
+        )
+        assert approve_resp.status_code == 200
+        done = approve_resp.json()
+        assert done["status"] == "done"
+        assert done["approved_by"] == "qa-user"
+
+    def test_done_direct_update_blocked(self, app_client):
+        """done への直接更新は禁止される。"""
+        sid, _ = self._create_session(app_client)
+        todo = app_client.post(f"/api/history/{sid}/todos", json={"title": "直接完了不可"}).json()
+        resp = app_client.patch(
+            f"/api/history/{sid}/todos/{todo['id']}",
+            json={"status": "done"},
+        )
+        assert resp.status_code == 400
+
+    def test_delete_session_cascades_todo_data(self, app_client):
+        """セッション削除時にTODO関連データも整合的に削除される。"""
+        sid, msg_id = self._create_session(app_client)
+        todo = app_client.post(
+            f"/api/history/{sid}/todos/from-chat",
+            json={"message_id": msg_id, "title": "削除確認"},
+        ).json()
+
+        del_resp = app_client.delete(f"/api/history/{sid}")
+        assert del_resp.status_code == 200
+
+        todos_resp = app_client.get(f"/api/history/{sid}/todos")
+        assert todos_resp.status_code == 404
+
+        detail_resp = app_client.get(f"/api/history/{sid}/todos/{todo['id']}")
+        assert detail_resp.status_code == 404

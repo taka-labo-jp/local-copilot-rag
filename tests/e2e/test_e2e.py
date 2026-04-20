@@ -20,8 +20,10 @@
     - 会話履歴リスト・セッション読込・削除
     - 詳細フィルター（wing / room / content_type）
     - 新規チャット
+    - 対応拡張子アップロード確認（XLSX / PNG / JPG / drawio / .dio / CSV / XML）
 """
 import io
+import json
 import os
 import time
 
@@ -565,3 +567,216 @@ class TestAdvancedFilter:
         page.locator("#roomFilter").fill("テストルーム")
         page.wait_for_timeout(200)
         expect(page.locator("#advancedScopeSummary")).to_contain_text("テストルーム")
+
+
+# ===================================================================
+# TC13: TODOワークフロー通し
+# ===================================================================
+
+class TestTodoWorkflow:
+    """確認→起票→生成→承認→完了の通しを確認する。"""
+
+    def test_chat_to_todo_to_approve(self, page: Page):
+        navigate_to_app(page)
+        todo_title = f"E2E TODO {int(time.time())}"
+
+        page.route(
+            "**/api/history/*/todos/preview",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "title": todo_title,
+                        "description": "回答をTODO化した説明",
+                        "acceptance_criteria": "review_required を経て完了できること",
+                    }
+                ),
+            ),
+        )
+
+        page.locator("#inputEl").fill("この要件の基本設計TODOを作りたい")
+        page.locator("#sendBtn").click()
+        expect(page.locator("#historyList .history-item.active")).to_be_visible(timeout=30_000)
+        page.locator("#historyList .history-item.active").click()
+
+        expect(page.locator(".msg.user .msg-todo-btn")).to_have_count(0)
+
+        todo_btn = page.locator(".msg.assistant .msg-todo-btn").first
+        expect(todo_btn).to_be_visible(timeout=30_000)
+
+        todo_btn.click()
+        expect(page.locator("#todoPreviewOverlay")).to_be_visible(timeout=TIMEOUT)
+        expect(page.locator("#todoPreviewTitle")).to_contain_text("このTODOで作成します", timeout=TIMEOUT)
+
+        page.locator("#todoPreviewCancelBtn").click()
+        expect(page.locator("#todoPreviewOverlay")).to_be_hidden(timeout=TIMEOUT)
+        expect(page.locator(f".todo-item:has-text('{todo_title}')")).to_have_count(0)
+
+        todo_btn.click()
+        expect(page.locator("#todoPreviewOverlay")).to_be_visible(timeout=TIMEOUT)
+        page.locator("#todoPreviewConfirmBtn").click()
+
+        expect(page.locator("#todoDrawerBackdrop")).to_be_visible(timeout=TIMEOUT)
+        expect(page.locator("#todoList")).to_contain_text(todo_title, timeout=TIMEOUT)
+        expect(page.locator("#historyList .history-item.active .h-todo-badge")).to_contain_text("1件", timeout=TIMEOUT)
+
+        todo_item = page.locator(f".todo-item:has-text('{todo_title}')").first
+        todo_id = int(todo_item.get_attribute("data-todo-id"))
+        session_id = todo_item.get_attribute("data-session-id")
+
+        expect(page.locator("#todoDetail")).to_be_visible(timeout=TIMEOUT)
+        page.locator("#todoDetailCloseBtn").click()
+        expect(page.locator("#todoDetail")).to_be_hidden(timeout=TIMEOUT)
+        expect(page.locator("#todoDetailEmpty")).to_be_visible(timeout=TIMEOUT)
+
+        todo_item.click()
+        expect(page.locator("#todoApproveBtn")).to_have_count(0)
+        page.locator("#todoStatusSelect").select_option("review_required")
+        page.locator("#todoSaveBtn").click()
+        expect(page.get_by_text("保存しました")).to_be_visible(timeout=TIMEOUT)
+        expect(page.locator("#todoApproveBtn")).to_be_visible(timeout=TIMEOUT)
+
+        page.locator("#todoApproveBtn").click()
+        expect(page.locator("#todoPreviewOverlay")).to_be_visible(timeout=TIMEOUT)
+        page.locator("#todoApproveReviewerInput").fill("e2e-reviewer")
+        page.locator("#todoPreviewConfirmBtn").click()
+        expect(page.locator("#todoDetail .status-done")).to_be_visible(timeout=TIMEOUT)
+
+        page.locator("#todoDrawerCloseBtn").click()
+        expect(page.locator("#todoDrawerBackdrop")).to_be_hidden(timeout=TIMEOUT)
+
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        page.locator(f"#historyList .history-item[data-id='{session_id}']").first.click()
+        expect(page.locator("#todoWorkflow .todo-stat-pill")).to_have_count(1, timeout=TIMEOUT)
+        page.locator("#todoOpenBtn").click()
+        expect(page.locator(f".todo-item:has-text('{todo_title}') .status-done")).to_be_visible(timeout=TIMEOUT)
+        page.locator("#todoDrawerCloseBtn").click()
+        expect(page.locator("#todoDrawerBackdrop")).to_be_hidden(timeout=TIMEOUT)
+        page.locator(f"#historyList .history-item[data-id='{session_id}'] .h-del").click()
+        expect(page.locator("#todoPreviewOverlay")).to_be_visible(timeout=TIMEOUT)
+        expect(page.locator("#todoPreviewBody")).to_contain_text("TODOがあります", timeout=TIMEOUT)
+        expect(page.locator("#todoPreviewBody")).to_contain_text(todo_title, timeout=TIMEOUT)
+        page.locator("#todoPreviewCancelBtn").click()
+        expect(page.locator(f"#historyList .history-item[data-id='{session_id}']")).to_be_visible(timeout=TIMEOUT)
+        assert todo_id > 0
+
+
+# ===================================================================
+# TC14: 対応拡張子アップロード確認
+# ===================================================================
+
+def _upload_file_api(filename: str, content: bytes, mime: str) -> None:
+    """API 経由でバイナリファイルをアップロードする。"""
+    import requests
+    resp = requests.post(
+        f"{BASE_URL}/api/documents",
+        files={"file": (filename, io.BytesIO(content), mime)},
+        data={"wing": "specifications", "room": "e2e-ext-test"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+
+def _make_xlsx_bytes() -> bytes:
+    """最小限の XLSX バイナリをメモリ上で生成する。"""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["col1", "col2"])
+    ws.append(["val1", "val2"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    wb.close()
+    return buf.getvalue()
+
+
+def _make_png_bytes() -> bytes:
+    """最小限の 1x1 PNG バイナリを返す（PIL 不要）。"""
+    # 1x1 白ピクセル PNG (バイナリ固定値)
+    return bytes([
+        0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,  # PNG signature
+        0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52,  # IHDR length + type
+        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,  # 1x1
+        0x08,0x02,0x00,0x00,0x00,0x90,0x77,0x53,  # 8bit RGB
+        0xde,0x00,0x00,0x00,0x0c,0x49,0x44,0x41,  # IDAT length + type
+        0x54,0x08,0xd7,0x63,0xf8,0xcf,0xc0,0x00,
+        0x00,0x00,0x02,0x00,0x01,0xe2,0x21,0xbc,
+        0x33,0x00,0x00,0x00,0x00,0x49,0x45,0x4e,  # IEND
+        0x44,0xae,0x42,0x60,0x82,
+    ])
+
+
+def _make_drawio_bytes() -> bytes:
+    """最小限の drawio XML バイナリを返す。"""
+    xml = """<mxfile>
+  <diagram name="E2E Test">
+    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" value="E2E" parent="0"/></root></mxGraphModel>
+  </diagram>
+</mxfile>"""
+    return xml.encode("utf-8")
+
+
+class TestExtensionUpload:
+    """各対応拡張子でアップロード＆ドキュメント一覧表示を確認する。"""
+
+    def _reload_and_check(self, page: Page, filename: str) -> None:
+        """リロード後にドキュメントリストにファイル名が表示されることを確認する。"""
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        expect(page.locator("#docList")).to_contain_text(filename, timeout=TIMEOUT)
+
+    def test_xlsx_upload_appears_in_doclist(self, page: Page):
+        """XLSX ファイルをアップロードするとドキュメントリストに表示される。"""
+        filename = f"e2e-ext-{int(time.time())}.xlsx"
+        _upload_file_api(filename, _make_xlsx_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        navigate_to_app(page)
+        self._reload_and_check(page, filename)
+
+    def test_png_upload_appears_in_doclist(self, page: Page):
+        """PNG 画像をアップロードするとドキュメントリストに表示される。"""
+        filename = f"e2e-ext-{int(time.time())}.png"
+        _upload_file_api(filename, _make_png_bytes(), "image/png")
+        navigate_to_app(page)
+        self._reload_and_check(page, filename)
+
+    def test_drawio_upload_appears_in_doclist(self, page: Page):
+        """drawio ファイルをアップロードするとドキュメントリストに表示される。"""
+        filename = f"e2e-ext-{int(time.time())}.drawio"
+        _upload_file_api(filename, _make_drawio_bytes(), "application/xml")
+        navigate_to_app(page)
+        self._reload_and_check(page, filename)
+
+    def test_csv_upload_appears_in_doclist(self, page: Page):
+        """CSV ファイルをアップロードするとドキュメントリストに表示される。"""
+        filename = f"e2e-ext-{int(time.time())}.csv"
+        content = "名前,年齢\nテスト,30\nユーザー,25".encode("utf-8")
+        _upload_file_api(filename, content, "text/csv")
+        navigate_to_app(page)
+        self._reload_and_check(page, filename)
+
+    def test_xml_upload_appears_in_doclist(self, page: Page):
+        """XML ファイルをアップロードするとドキュメントリストに表示される。"""
+        filename = f"e2e-ext-{int(time.time())}.xml"
+        content = b"<?xml version='1.0'?><root><item>E2E</item></root>"
+        _upload_file_api(filename, content, "application/xml")
+        navigate_to_app(page)
+        self._reload_and_check(page, filename)
+
+    def test_jpg_upload_appears_in_doclist(self, page: Page):
+        """JPEG 画像をアップロードするとドキュメントリストに表示される。"""
+        filename = f"e2e-ext-{int(time.time())}.jpg"
+        # 最小限の JPEG (SOI + EOI マーカーのみ)
+        content = bytes([0xFF, 0xD8, 0xFF, 0xD9])
+        _upload_file_api(filename, content, "image/jpeg")
+        navigate_to_app(page)
+        self._reload_and_check(page, filename)
+
+    def test_dio_upload_appears_in_doclist(self, page: Page):
+        """.dio 拡張子ファイルをアップロードするとドキュメントリストに表示される。"""
+        filename = f"e2e-ext-{int(time.time())}.dio"
+        _upload_file_api(filename, _make_drawio_bytes(), "application/xml")
+        navigate_to_app(page)
+        self._reload_and_check(page, filename)
+

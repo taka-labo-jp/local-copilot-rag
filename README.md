@@ -1,246 +1,227 @@
 # Spec Copilot
 
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](#環境要件)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-仕様書ファイルを取り込み、ローカル知識ベース検索（LangChain + ChromaDB）と GitHub Copilot SDK を組み合わせて回答を生成する RAG チャットアプリです。
+仕様書ファイルをローカルで管理し、**GitHub Copilot SDK** を使って仕様に基づいた回答を生成する RAG チャットアプリケーションです。  
+ChromaDB と SQLite をローカルで利用するため、LLM への外部通信以外は完全にオンプレミスで動作します。
 
-> [!WARNING]
-> 生成AIによって実装したものであり、ハルシネーションが含まれる可能性があります。
+---
 
 ## 主な機能
-- 仕様書アップロード（単体 + フォルダ再帰一括）
-- プロジェクト単位のドキュメント整理（追加 / 移動 / 空プロジェクト削除）
-- コンテキスト指定検索（ファイル・分類・プロジェクト単位で追加）
-- 会話履歴と retrieval 診断ログ
-- ダーク/ライトモード切替
-- UI 言語切替（日本語 / 英語）
-- Query Transform + Reranking による検索精度改善
 
-## UI
+| カテゴリ | 機能 |
+|---|---|
+| **ドキュメント管理** | 単体/フォルダ一括アップロード、プロジェクト分類、コンテキスト指定 |
+| **RAG チャット** | 仕様書を参照した回答生成、retrieval 診断ログ、Query Transform + Reranking |
+| **セッション TODO** | 回答内容から AI が TODO テンプレートを生成・管理、承認フロー |
+| **UI** | ダーク/ライトモード、日本語/英語切替、ドロワー型 TODO パネル |
 
-### ライトモード + 日本語
-![](./docs/images/light_japanase.png)
+---
 
-### ダークモード + 英語
-![](./docs/images/dark_english.png)
+## スクリーンショット
 
+### ライトモード（日本語）
+![ライトモード 日本語](./docs/images/light_japanase.png)
+
+### ダークモード（英語）
+![ダークモード 英語](./docs/images/dark_english.png)
+
+---
 
 ## アーキテクチャ
-- Web/API: FastAPI
-- 変換: markitdown + Pandas + openpyxl + Tesseract OCR（+ 任意でLibreOfficeページOCR）
-- 検索: LangChain + ChromaDB（ローカル永続）
-- 埋め込み: sentence-transformers
-- 生成: GitHub Copilot SDK
+
+```text
+Browser ──HTTP(local)──> FastAPI (app/main.py)
+                              │
+               ┌──────────────┤
+               │              │
+           ChromaDB        SQLite
+        (data/palace)   (data/history.db)
+      ローカル永続         チャット/TODO 履歴
+               │
+               └──(LLM のみ外部)──> GitHub Copilot SDK
+```
+
+| レイヤー | 技術スタック |
+|---|---|
+| Web / API | FastAPI |
+| ドキュメント変換 | markitdown, Pandas, openpyxl, Tesseract OCR (+ 任意: LibreOffice ページ OCR) |
+| ベクトル検索 | LangChain + ChromaDB（ローカル永続） |
+| 埋め込みモデル | sentence-transformers（ローカルキャッシュ） |
+| LLM | GitHub Copilot SDK |
+| フロントエンド | Vanilla JS SPA（外部 CDN 不使用） |
+
+---
 
 ## 対応拡張子
-現在の実装でアップロード受け付け対象としている拡張子は以下です。
 
 | 区分 | 拡張子 |
-| --- | --- |
+|---|---|
 | Office | `.docx`, `.doc`, `.xlsx`, `.xls`, `.pptx`, `.ppt` |
 | 文書 | `.pdf`, `.html`, `.htm`, `.md`, `.txt` |
 | データ | `.csv`, `.json`, `.xml` |
-| 追加形式 | `.epub`, `.zip` |
+| 画像 | `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`, `.webp` |
+| 図形 | `.drawio`, `.dio` |
+| その他 | `.epub`, `.zip` |
 
-実装定義は [app/api/documents.py](app/api/documents.py) の `ALLOWED_EXTENSIONS` にあります。
+---
 
 ## 環境要件
-- Python 3.12+
-- Linux/macOS 推奨
 
-補足:
-- ChromaDB サーバーの別立ては不要です（`langchain-chroma` のローカル永続利用）。
-- `setup.sh` 実行時に `sentence-transformers` の埋め込みモデルを事前取得します。
-- OCRには OS 側の `tesseract` バイナリが必要です。
+- Python 3.12+
+- Linux / macOS 推奨（Windows は WSL2 を推奨）
+
+---
 
 ## セットアップ
 
 ### 1. 自動セットアップ（推奨）
+
 ```bash
+git clone https://github.com/<your-org>/memplace-spec-copilot.git
+cd memplace-spec-copilot
 ./setup.sh
 ```
 
+`setup.sh` は仮想環境の作成、依存パッケージのインストール、埋め込みモデルの事前取得を一括実行します。
+
 ### 2. 手動セットアップ
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env   # 必要に応じて編集
 ```
 
-### 3. 起動
+### 3. OCR のインストール（Linux）
+
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-jpn tesseract-ocr-eng libreoffice
+```
+
+### 4. 起動
+
 ```bash
 source .venv/bin/activate
 uvicorn app.main:app --env-file .env --host 0.0.0.0 --port 8080
 ```
 
-> [!WARNING]
-> .envファイルは最初はありません。.env.example から作成ください。
-> .env を設定しない場合は ```--env-file .env``` を未設定で起動ください。
-> 未設定時は .env.example の内容をハードコーディングしているためその内容で動作します。
+> `.env` を使わない場合は `--env-file .env` を省略してください。未設定項目は `.env.example` の既定値が使われます。
 
+ブラウザで `http://localhost:8080` を開いてください。
 
-アクセス先: `http://localhost:8080`
+---
 
 ## 設定
-主要設定は [.env.example](.env.example) を参照してください。
 
-- `COPILOT_MODEL`
-- `LISTEN_ADDR`
-- `HISTORY_DB`
-- `UPLOAD_DIR`
-- `PALACE_DIR`
-- `BULK_UPLOAD_DIR`
-- `EXTRACTED_IMAGE_DIR`
-- `OCR_LANG`
-- `EMBEDDING_MODEL`
-- `EMBEDDING_LOCAL_FILES_ONLY`
-- `DISABLE_RUNTIME_TELEMETRY`
-- `EXCEL_TABLE_ROWS_PER_CHUNK`
-- `ENABLE_VISUAL_PAGE_OCR`
-- `MAX_VISUAL_OCR_PAGES`
-- `SOFFICE_BIN`
+設定はすべて `.env` ファイルで管理します。`.env.example` を参考に必要な項目を編集してください。
 
-### OCRセットアップ（Linux）
+| 変数 | 説明 |
+|---|---|
+| `COPILOT_MODEL` | 使用する Copilot モデル名 |
+| `HISTORY_DB` | チャット / TODO 履歴の SQLite パス |
+| `UPLOAD_DIR` | アップロード先ディレクトリ |
+| `PALACE_DIR` | ChromaDB 永続ディレクトリ |
+| `BULK_UPLOAD_DIR` | 一括アップロード元ディレクトリ |
+| `EMBEDDING_MODEL` | 埋め込みモデル名 |
+| `EMBEDDING_LOCAL_FILES_ONLY` | `true` でローカルキャッシュのみ参照 |
+| `OCR_LANG` | Tesseract の言語指定（例: `jpn+eng`） |
+| `ENABLE_VISUAL_PAGE_OCR` | LibreOffice ページ OCR の有効化 |
+| `DISABLE_RUNTIME_TELEMETRY` | 各種テレメトリを無効化（既定: `true`） |
+
+---
+
+## GitHub Copilot 認証
+
+本アプリは **GitHub Copilot SDK** を利用します。API キーの手動設定は不要で、GitHub CLI 経由のトークンが自動的に使用されます。
+
 ```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-jpn tesseract-ocr-eng libreoffice
-```
-
-## 使い方
-1. サイドバーから仕様書をアップロード
-2. 必要に応じてプロジェクトへ整理
-3. コンテキスト（⊕ボタン or 右クリック）で検索対象を限定
-4. チャットで質問し、必要に応じて retrieval ログで挙動確認
-
-## API（抜粋）
-- `POST /api/documents`
-- `POST /api/documents/bulk-upload`
-- `GET /api/documents`
-- `DELETE /api/documents/{doc_id}`
-- `GET /api/documents/projects`
-- `POST /api/documents/projects`
-- `DELETE /api/documents/projects/{project_id}`
-- `PATCH /api/documents/{doc_id}/project`
-- `POST /api/chat`
-- `GET /api/history`
-- `GET /api/history/{session_id}/retrievals`
-
-## 認証: GitHub Copilot CLI
-
-このアプリは **GitHub Copilot SDK** を使用して LLM 応答を生成します。API キーの手動管理は不要で、GitHub Copilot CLI の認証トークンが自動的に利用されます。
-
-### 前提条件
-1. GitHub Copilot のサブスクリプションが有効であること
-2. GitHub Copilot CLI がインストール・認証済みであること
-
-### セットアップ
-```bash
-# GitHub CLI をインストール（未導入の場合）
+# GitHub CLI のインストール（未導入の場合）
 # https://cli.github.com/
 
-# GitHub にログイン
+# ログインと Copilot 拡張のインストール
 gh auth login
-
-# Copilot 拡張をインストール
 gh extension install github/gh-copilot
 
-# 認証状態を確認
+# 認証状態の確認
 gh auth status
 gh copilot --version
 ```
 
-認証済みの状態でアプリを起動すると、`github-copilot-sdk` が OS のトークンストアから認証情報を自動取得します。`.env` に API キーを記載する必要はありません。
+---
+
+## 使い方
+
+1. **ドキュメントのアップロード**  
+   サイドバーの「アップロード / ドロップ」またはフォルダ一括アップロードで仕様書を登録します。
+
+2. **コンテキストの指定**  
+   ⊕ ボタンまたは右クリックでファイル・プロジェクト単位の検索範囲を絞り込みます。
+
+3. **チャット**  
+   入力欄に質問を入力して送信します。回答に参照元仕様書が示され、検索診断ログで retrieval の詳細を確認できます。
+
+4. **TODO の作成**  
+   アシスタントの回答に表示される「TODO化」ボタンを押すと、AI が回答内容から TODO テンプレートを生成します。  
+   内容を確認・編集してから作成するため、不要な TODO は作られません。
+
+5. **TODO の管理**  
+   セッション下部の「TODO一覧を開く」でドロワーを開き、ステータス変更・承認・AI ドラフト生成を行います。  
+   承認フロー：`下書き` → `対応中` → `レビュー待ち` → （承認者名を入力）→ `完了`
+
+---
+
+## API（抜粋）
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| `POST` | `/api/documents` | ドキュメントをアップロード |
+| `POST` | `/api/documents/bulk-upload` | フォルダ一括アップロード |
+| `GET` | `/api/documents` | ドキュメント一覧取得 |
+| `DELETE` | `/api/documents/{doc_id}` | ドキュメント削除 |
+| `POST` | `/api/chat` | チャット（SSE ストリーミング） |
+| `GET` | `/api/history` | セッション一覧（TODO 件数を含む） |
+| `GET` | `/api/history/{session_id}` | メッセージ一覧 |
+| `POST` | `/api/history/{session_id}/todos` | TODO 作成 |
+| `POST` | `/api/history/{session_id}/todos/preview` | AI による TODO プレビュー生成 |
+| `PATCH` | `/api/history/{session_id}/todos/{todo_id}` | TODO 更新 |
+| `POST` | `/api/history/{session_id}/todos/{todo_id}/approve` | TODO 承認・完了 |
+
+---
 
 ## 外部通信ポリシー
 
-このリポジトリでは、通常運用時（セットアップ完了後）に発生する外部通信を最小化する設計を採用しています。
+通常運用時（セットアップ完了後）の外部通信は **GitHub Copilot SDK による LLM 応答生成のみ** です。
 
-- LLM 応答生成の外部通信: **GitHub Copilot SDK のみ**
-- フロントエンド: `marked` は CDN ではなく `static/vendor/marked.min.js` をローカル配信
-- 検索・履歴・文書保存: ChromaDB / SQLite をローカル利用
-- 埋め込みモデル: `setup.sh` で事前取得し、実行時は `EMBEDDING_LOCAL_FILES_ONLY=true` でローカルキャッシュのみ参照
-- ランタイム抑止: `DISABLE_RUNTIME_TELEMETRY=true`（既定）で `posthog/opentelemetry/huggingface telemetry` を無効化
+| コンポーネント | 外部通信 |
+|---|---|
+| フロントエンド JS ライブラリ | なし（`static/vendor/` にローカル配置） |
+| ベクトル検索・履歴・文書保存 | なし（ChromaDB / SQLite をローカル利用） |
+| 埋め込みモデル | なし（セットアップ時に取得済み、`EMBEDDING_LOCAL_FILES_ONLY=true`） |
+| テレメトリ | 無効（`DISABLE_RUNTIME_TELEMETRY=true`） |
+| LLM 推論 | **あり**（GitHub Copilot SDK のみ） |
 
-注意:
-- 依存パッケージのインストール、GitHub CLI/Copilot CLI 認証、埋め込みモデルの初回取得はセットアップ時の外部通信に含まれます。
+---
 
-### システム構成図（ASCII）
+## 開発・テスト
 
-```text
-┌────────────────────────────────────────────────────────────┐
-│ Browser (127.0.0.1)                                        │
-│  - static/index.html                                       │
-│  - static/app.js                                           │
-│  - static/vendor/marked.min.js (local)                    │
-└───────────────┬────────────────────────────────────────────┘
-		│ HTTP (local)
-		▼
-┌────────────────────────────────────────────────────────────┐
-│ FastAPI App (app/main.py)                                 │
-│  /api/chat /api/documents /api/history                    │
-└───────┬───────────────────────────────┬────────────────────┘
-	│                               │
-	│ local                         │ local
-	▼                               ▼
-┌──────────────────────────┐   ┌────────────────────────────┐
-│ ChromaDB (data/palace)   │   │ SQLite (data/history.db)   │
-│ + Embeddings cache(local)│   │ chat/doc metadata          │
-└──────────────────────────┘   └────────────────────────────┘
-	│
-	│ external (only for LLM response)
-	▼
-┌────────────────────────────────────────────────────────────┐
-│ GitHub Copilot SDK                                         │
-│  - authenticated via GitHub Copilot CLI token store        │
-└────────────────────────────────────────────────────────────┘
-```
-
-## セキュリティ
-
-### 確認済みセキュリティ対策
-
-| カテゴリ | 対策内容 | 状態 |
-| --- | --- | --- |
-| **シークレット管理** | API キー/トークン/パスワードのハードコードなし。`.env` 実体は `.gitignore` 対象 | ✅ |
-| **認証・認可** | GitHub Copilot SDK のトークンは OS 認証ストア経由で取得。アプリ内に認証情報を保持しない | ✅ |
-| **SQL インジェクション** | 全 SQL クエリがパラメタライズドクエリ（`?` プレースホルダ）で実行。テストで攻撃文字列を検証済み | ✅ |
-| **ファイルアップロード** | 拡張子ホワイトリスト方式（16種のみ許可）。実行可能形式は全てブロック | ✅ |
-| **パストラバーサル** | アップロードファイルはファイルシステムに直接保存されず、一時ファイル経由で markitdown 変換後にテキストのみ DB 登録 | ✅ |
-| **XSS** | フロントエンドは DOM 操作（`textContent`）ベース。Markdown 描画時は `marked.parse` 後に危険タグ（`script` など）・イベント属性（`on*`）・`javascript:` URL を除去してから `innerHTML` へ反映 | ✅ |
-| **データ隔離** | 実データ保存先（`data/`, `uploads/`, `bulk_uploads/`, `test_samples/`）を `.gitignore` で除外 | ✅ |
-| **プロンプトインジェクション** | システムプロンプトで knowledge_search 結果を `<context>` タグで囲みデータとして扱う指示を明示。命令実行を禁止 | ✅ |
-| **外部コマンド実行** | `subprocess.run` は LibreOffice OCR 用のみ。`shell=False`（デフォルト）で実行、120秒タイムアウト付き | ✅ |
-| **依存パッケージ** | `requirements.txt` でバージョン固定。定期的な `pip audit` の実施を推奨 | ✅ |
-
-### 既知の制約・改善候補
-
-| 項目 | 現状 | 推奨改善 |
-| --- | --- | --- |
-| CORS | `allow_origins=["*"]`（開発用の全許可） | 本番ではオリジンを明示的に制限する |
-| レートリミット | 未実装 | 公開環境では `slowapi` 等の導入を推奨 |
-| ファイルサイズ制限 | FastAPI/uvicorn のデフォルト（約100MB） | 環境変数で明示的な上限を設定する |
-| HTTPS | ローカル実行前提で HTTP | リバースプロキシ（nginx 等）で TLS 終端する |
-| セキュリティヘッダ | CSP/X-Frame-Options 等未設定 | 本番ではミドルウェアまたはリバースプロキシで付与する |
-| 認証・認可 | アプリレベルのユーザー認証なし | マルチユーザー環境では OAuth 等を導入する |
-| ログ | 標準出力のみ | 本番では構造化ログ + ログ集約基盤を推奨 |
-
-補足（本リポジトリの前提）:
-- 本プロジェクトは **ローカル環境での利用を前提** とする。
-- 上表の CORS / HTTPS / セキュリティヘッダ / 認証・認可 などは主に公開運用時の課題であり、ローカル利用のみであれば必須対応ではない。
-- ただし、インターネット公開または複数ユーザー利用を行う場合は、上表の推奨改善を適用すること。
-
-### セキュリティスキャン
 ```bash
-# 依存パッケージの脆弱性チェック
-pip install pip-audit
-pip-audit
+# 依存パッケージ（開発用）
+pip install -r requirements-dev.txt
 
-# シークレットスキャン（grep ベース）
-grep -RInE '(password|secret|token|api_key)\s*=' --include='*.py' --include='*.env*' .
+# テスト実行
+pytest
+
+# E2E テスト（別ターミナルでサーバー起動が必要）
+BASE_URL=http://localhost:8080 pytest tests/e2e/
 ```
+
+---
 
 ## ライセンス
-MIT License。詳細は [LICENSE](LICENSE) を参照してください。
+
+[MIT License](LICENSE)
