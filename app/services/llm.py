@@ -1,11 +1,13 @@
 """GitHub Copilot SDK ラッパー — knowledge_search をカスタムツールとして渡し応答をストリーミング"""
 import asyncio
+import base64
 import logging
+import mimetypes
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 from copilot import CopilotClient
-from copilot.session import PermissionHandler, SystemMessageReplaceConfig
+from copilot.session import BlobAttachment, PermissionHandler, SystemMessageReplaceConfig
 from copilot.tools import Tool, define_tool
 from copilot.generated.session_events import SessionEventType
 from pydantic import BaseModel, Field
@@ -367,3 +369,87 @@ async def generate_stream(
         except Exception:
             pass
 
+
+_IMAGE_ANALYSIS_PROMPT = (
+    "この画像の内容を詳細に説明してください。\n"
+    "テキスト、図形、構造、要素間の関係性、色、レイアウトなどを含め、"
+    "図の目的や示している情報が伝わるよう日本語で説明してください。"
+)
+
+
+async def analyze_image_with_ai(
+    image_bytes: bytes,
+    filename: str,
+    model: str = "claude-sonnet-4.5",
+) -> str:
+    """画像を GitHub Copilot の vision 機能で解析し、内容説明テキストを返す。
+
+    Args:
+        image_bytes: 画像のバイト列
+        filename: 元ファイル名（MIME type 推定に使用）
+        model: 使用するモデル名
+
+    Returns:
+        AIが生成した画像の説明テキスト
+
+    Raises:
+        RuntimeError: セッション接続や応答取得に失敗した場合
+    """
+    mime_type = mimetypes.guess_type(filename)[0] or "image/png"
+    b64data = base64.b64encode(image_bytes).decode("utf-8")
+
+    client = CopilotClient()
+    session = None
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    try:
+        await client.start()
+
+        session = await client.create_session(
+            on_permission_request=PermissionHandler.approve_all,
+            model=model,
+            streaming=True,
+            working_directory="/tmp",
+        )
+
+        def on_event(event) -> None:
+            if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
+                delta = getattr(event.data, "delta_content", None) or ""
+                if delta:
+                    loop.call_soon_threadsafe(queue.put_nowait, delta)
+            elif event.type in (SessionEventType.SESSION_IDLE, SessionEventType.SESSION_ERROR):
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        session.on(on_event)
+
+        attachment: BlobAttachment = {
+            "type": "blob",
+            "data": b64data,
+            "mimeType": mime_type,
+            "displayName": filename,
+        }
+        await session.send(_IMAGE_ANALYSIS_PROMPT, attachments=[attachment])
+
+        parts: list[str] = []
+        while True:
+            chunk = await asyncio.wait_for(queue.get(), timeout=120.0)
+            if chunk is None:
+                break
+            parts.append(chunk)
+
+        result = "".join(parts).strip()
+        if not result:
+            raise RuntimeError("AIから空の応答が返されました")
+        return result
+
+    finally:
+        if session is not None:
+            try:
+                await session.disconnect()
+            except Exception:
+                pass
+        try:
+            await client.stop()
+        except Exception:
+            pass

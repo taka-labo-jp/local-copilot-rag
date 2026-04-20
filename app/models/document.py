@@ -17,6 +17,7 @@ class DocumentUploadResponse(BaseModel):
     table_chunk_count: int = 0
     image_chunk_count: int = 0
     visual_chunk_count: int = 0
+    diagram_chunk_count: int = 0
 
 
 class DocumentInfo(BaseModel):

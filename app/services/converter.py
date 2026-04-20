@@ -3,7 +3,10 @@
 - 既存: markitdown によるMarkdown変換
 - 拡張: XLSXはPandas整形テーブル + 埋め込み画像OCRテキストをチャンク化
 - 拡張: DOCX/PPTX/PDFも画像OCRを追加し、可能なら図形を含むページOCRを実施
+- 拡張: drawio/dioファイルをページ単位のXMLチャンクに変換
 """
+import base64
+import gzip
 import hashlib
 import io
 import logging
@@ -11,9 +14,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import pandas as pd
 import pytesseract
@@ -25,6 +31,11 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 _converter = MarkItDown()
+
+IMAGE_EXTENSIONS: frozenset[str] = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp",
+})
+DRAWIO_EXTENSIONS: frozenset[str] = frozenset({".drawio", ".dio"})
 
 
 def _safe_slug(text: str) -> str:
@@ -516,6 +527,108 @@ def convert_to_chunks(
                     "extractor": "markitdown",
                 },
             },
+        )
+
+    return chunks
+
+
+def _decompress_drawio_page_content(text: str) -> str:
+    """drawioページのbase64+rawDEFLATE圧縮コンテンツを展開する。
+
+    drawio は各 <diagram> 要素の内容を以下の形式でエンコードする:
+      base64( rawDeflate( urlEncoded( XML ) ) )
+    展開できない場合はそのまま返す。
+    """
+    text = text.strip()
+    if not text:
+        return ""
+
+    # Already plain XML?
+    try:
+        ET.fromstring(text)
+        return text
+    except ET.ParseError:
+        pass
+
+    # base64 + raw deflate (wbits=-15)
+    for candidate in (text, unquote(text)):
+        try:
+            decoded = base64.b64decode(candidate + "==")  # padding 補完
+            inner = zlib.decompress(decoded, -15).decode("utf-8", errors="ignore")
+            return unquote(inner)
+        except Exception:
+            continue
+
+    return text
+
+
+def convert_drawio_to_chunks(
+    file_bytes: bytes,
+    source_filename: str,
+) -> list[dict[str, Any]]:
+    """drawio/dioファイルをページ単位のXMLチャンクに変換する。
+
+    各 <diagram> ページを1チャンクとして返す。
+    content_type は "diagram"、extractor は "drawio-xml"。
+    """
+    raw = file_bytes
+    # ファイルレベルのgzip圧縮を試みる（一部ツールが出力するケース）
+    try:
+        raw = gzip.decompress(file_bytes)
+    except Exception:
+        pass
+
+    try:
+        root = ET.fromstring(raw.decode("utf-8", errors="ignore"))
+    except ET.ParseError:
+        logger.warning("drawio XML parse failed: %s", source_filename)
+        return []
+
+    diagrams = root.findall("diagram")
+    if not diagrams:
+        # ルート自体が mxGraphModel の場合など単ページ
+        diagrams = [root]
+
+    chunks: list[dict[str, Any]] = []
+    for page_idx, diagram in enumerate(diagrams, start=1):
+        page_name = diagram.get("name", f"Page-{page_idx}")
+
+        text_content = (diagram.text or "").strip()
+        if text_content:
+            inner_xml_str = _decompress_drawio_page_content(text_content)
+        else:
+            children = list(diagram)
+            if not children:
+                continue
+            inner_xml_str = "".join(ET.tostring(c, encoding="unicode") for c in children)
+
+        if not inner_xml_str.strip():
+            continue
+
+        # 整形済みXMLに変換（Python 3.9+）
+        try:
+            inner_root = ET.fromstring(inner_xml_str)
+            ET.indent(inner_root, space="  ")
+            inner_xml_str = ET.tostring(inner_root, encoding="unicode")
+        except ET.ParseError:
+            pass
+
+        text = (
+            f"File: {source_filename}\n"
+            f"Page: {page_name} (index: {page_idx})\n"
+            f"Format: drawio/mxGraph XML\n"
+            f"Content:\n{inner_xml_str}"
+        )
+        chunks.append(
+            {
+                "text": text,
+                "metadata": {
+                    "content_type": "diagram",
+                    "page_name": page_name,
+                    "page_index": page_idx,
+                    "extractor": "drawio-xml",
+                },
+            }
         )
 
     return chunks

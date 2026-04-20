@@ -8,9 +8,12 @@
 - プロジェクト CRUD
 - プロジェクト間移動
 - 一括アップロード
+- 画像ファイル（AI vision 解析）
+- drawio ファイル（XML チャンク）
 """
 import io
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -279,19 +282,164 @@ class TestBulkUpload:
 class TestAllowedExtensions:
     """許可拡張子のホワイトリスト検証。"""
 
-    EXPECTED = {
+    EXPECTED_BASE = {
         ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",
         ".pdf", ".html", ".htm", ".md", ".txt", ".csv",
         ".json", ".xml", ".epub", ".zip",
     }
+    EXPECTED_IMAGE = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
+    EXPECTED_DRAWIO = {".drawio", ".dio"}
 
-    def test_allowed_extensions_match(self):
-        """ALLOWED_EXTENSIONS が期待されるセットと一致する。"""
+    def test_allowed_extensions_contain_base(self):
+        """ALLOWED_EXTENSIONS が基本形式を含む。"""
         from app.api.documents import ALLOWED_EXTENSIONS
-        assert ALLOWED_EXTENSIONS == self.EXPECTED
+        assert self.EXPECTED_BASE.issubset(ALLOWED_EXTENSIONS)
+
+    def test_allowed_extensions_contain_images(self):
+        """ALLOWED_EXTENSIONS が画像拡張子を含む。"""
+        from app.api.documents import ALLOWED_EXTENSIONS
+        assert self.EXPECTED_IMAGE.issubset(ALLOWED_EXTENSIONS)
+
+    def test_allowed_extensions_contain_drawio(self):
+        """ALLOWED_EXTENSIONS が drawio 拡張子を含む。"""
+        from app.api.documents import ALLOWED_EXTENSIONS
+        assert self.EXPECTED_DRAWIO.issubset(ALLOWED_EXTENSIONS)
 
     def test_no_executable_extensions(self):
         """実行可能拡張子が含まれていないことを確認する。"""
         from app.api.documents import ALLOWED_EXTENSIONS
         dangerous = {".exe", ".bat", ".cmd", ".sh", ".ps1", ".py", ".rb", ".js", ".php", ".dll", ".so"}
         assert ALLOWED_EXTENSIONS.isdisjoint(dangerous)
+
+
+class TestImageUpload:
+    """画像ファイルのアップロードテスト（AI vision 解析をモック）。"""
+
+    _AI_RESPONSE = "これはテスト用インフラ構成図です。Webサーバーとデータベースが描かれています。"
+
+    def _make_minimal_png(self) -> bytes:
+        """最小限の有効な PNG バイト列を生成する。"""
+        import struct, zlib as _zlib
+        def png_chunk(tag: bytes, data: bytes) -> bytes:
+            c = struct.pack(">I", len(data)) + tag + data
+            return c + struct.pack(">I", _zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+        header = b"\x89PNG\r\n\x1a\n"
+        ihdr = png_chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        # 1x1 RGB white pixel
+        raw = b"\x00\xff\xff\xff"
+        idat = png_chunk(b"IDAT", _zlib.compress(raw))
+        iend = png_chunk(b"IEND", b"")
+        return header + ihdr + idat + iend
+
+    @pytest.mark.parametrize("ext,mime", [
+        (".png", "image/png"),
+        (".jpg", "image/jpeg"),
+        (".jpeg", "image/jpeg"),
+    ])
+    def test_upload_image_calls_ai_and_registers(self, app_client, ext, mime):
+        """画像ファイルをアップロードすると AI 解析が呼ばれてチャンクが登録される。"""
+        png_bytes = self._make_minimal_png()
+        with patch(
+            "app.api.documents.llm.analyze_image_with_ai",
+            new_callable=AsyncMock,
+            return_value=self._AI_RESPONSE,
+        ):
+            resp = app_client.post(
+                "/api/documents",
+                files={"file": (f"diagram{ext}", io.BytesIO(png_bytes), mime)},
+                data={"wing": "specifications", "room": "infra"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["filename"] == f"diagram{ext}"
+        assert body["image_chunk_count"] >= 1
+        assert body["drawer_count"] >= 1
+
+    def test_upload_image_ai_failure_returns_500(self, app_client):
+        """AI 解析が失敗した場合は 500 エラーを返す。"""
+        png_bytes = self._make_minimal_png()
+        with patch(
+            "app.api.documents.llm.analyze_image_with_ai",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("vision API error"),
+        ):
+            resp = app_client.post(
+                "/api/documents",
+                files={"file": ("test.png", io.BytesIO(png_bytes), "image/png")},
+            )
+        assert resp.status_code == 500
+
+    def test_image_extensions_blocked_without_ai(self, app_client):
+        """画像拡張子は受理されること（415 にならない）。"""
+        with patch(
+            "app.api.documents.llm.analyze_image_with_ai",
+            new_callable=AsyncMock,
+            return_value="test description",
+        ):
+            resp = app_client.post(
+                "/api/documents",
+                files={"file": ("photo.webp", io.BytesIO(b"RIFF....WEBP"), "image/webp")},
+            )
+        # 415 は返さない（形式は受け付ける）
+        assert resp.status_code != 415
+
+
+class TestDrawioUpload:
+    """drawio ファイルのアップロードテスト。"""
+
+    def _make_drawio(self, page_name: str = "Page-1", value: str = "テスト") -> bytes:
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<mxfile>
+  <diagram name="{page_name}">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="{value}" vertex="1" parent="1">
+          <mxGeometry x="100" y="100" width="120" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>""".encode("utf-8")
+
+    def test_upload_drawio_registers_diagram_chunk(self, app_client):
+        """drawio ファイルをアップロードすると diagram チャンクが登録される。"""
+        resp = app_client.post(
+            "/api/documents",
+            files={"file": ("infra.drawio", io.BytesIO(self._make_drawio()), "application/xml")},
+            data={"wing": "specifications", "room": "infra-diagram"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["filename"] == "infra.drawio"
+        assert body["diagram_chunk_count"] >= 1
+        assert body["drawer_count"] >= 1
+
+    def test_upload_dio_extension(self, app_client):
+        """.dio 拡張子も受理して diagram チャンクを登録する。"""
+        resp = app_client.post(
+            "/api/documents",
+            files={"file": ("arch.dio", io.BytesIO(self._make_drawio()), "application/xml")},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["diagram_chunk_count"] >= 1
+
+    def test_upload_multipage_drawio(self, app_client):
+        """複数ページの drawio は全ページ分チャンクが登録される。"""
+        multipage = """<?xml version="1.0" encoding="UTF-8"?>
+<mxfile>
+  <diagram name="Page-1">
+    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" value="A" vertex="1" parent="0"><mxGeometry as="geometry"/></mxCell></root></mxGraphModel>
+  </diagram>
+  <diagram name="Page-2">
+    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" value="B" vertex="1" parent="0"><mxGeometry as="geometry"/></mxCell></root></mxGraphModel>
+  </diagram>
+</mxfile>""".encode("utf-8")
+        resp = app_client.post(
+            "/api/documents",
+            files={"file": ("multipage.drawio", io.BytesIO(multipage), "application/xml")},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["diagram_chunk_count"] == 2

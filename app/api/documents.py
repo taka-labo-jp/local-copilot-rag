@@ -15,7 +15,7 @@ from app.models.document import (
     ProjectCreateRequest,
     ProjectInfo,
 )
-from app.services import converter, memory
+from app.services import converter, llm, memory
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -27,6 +27,10 @@ ALLOWED_EXTENSIONS = {
     ".pdf", ".html", ".htm",
     ".md", ".txt", ".csv",
     ".json", ".xml", ".epub", ".zip",
+    # 画像ファイル（AI vision 解析）
+    *converter.IMAGE_EXTENSIONS,
+    # drawio / dia 図形ファイル（XML チャンク）
+    *converter.DRAWIO_EXTENSIONS,
 }
 
 
@@ -148,6 +152,7 @@ async def _register_document(
         table_chunk_count=type_counts.get("table", 0),
         image_chunk_count=type_counts.get("image", 0),
         visual_chunk_count=type_counts.get("visual_page", 0),
+        diagram_chunk_count=type_counts.get("diagram", 0),
     )
 
 
@@ -171,18 +176,41 @@ async def upload_document(
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="空のファイルです")
 
-    # 形式に応じてチャンク化する（XLSXはPandas+OCR、その他はMarkItDown）。
+    # 形式に応じてチャンク化する。
     try:
-        chunks = converter.convert_to_chunks(
-            file_bytes=file_bytes,
-            filename=file.filename or "file.md",
-            image_root_dir=settings.extracted_image_dir,
-            excel_rows_per_chunk=settings.excel_table_rows_per_chunk,
-            ocr_lang=settings.ocr_lang,
-            enable_visual_page_ocr=settings.enable_visual_page_ocr,
-            max_visual_ocr_pages=settings.max_visual_ocr_pages,
-            soffice_bin=settings.soffice_bin,
-        )
+        if suffix in converter.IMAGE_EXTENSIONS:
+            # 画像は AI vision で解析してチャンクを生成する。
+            description = await llm.analyze_image_with_ai(
+                image_bytes=file_bytes,
+                filename=file.filename or "image.png",
+                model=settings.copilot_model,
+            )
+            chunks = [
+                {
+                    "text": f"File: {file.filename}\n{description}",
+                    "metadata": {
+                        "content_type": "image",
+                        "extractor": "copilot-vision",
+                    },
+                }
+            ]
+        elif suffix in converter.DRAWIO_EXTENSIONS:
+            # drawio は XML チャンクとして登録する。
+            chunks = converter.convert_drawio_to_chunks(
+                file_bytes=file_bytes,
+                source_filename=file.filename or "diagram.drawio",
+            )
+        else:
+            chunks = converter.convert_to_chunks(
+                file_bytes=file_bytes,
+                filename=file.filename or "file.md",
+                image_root_dir=settings.extracted_image_dir,
+                excel_rows_per_chunk=settings.excel_table_rows_per_chunk,
+                ocr_lang=settings.ocr_lang,
+                enable_visual_page_ocr=settings.enable_visual_page_ocr,
+                max_visual_ocr_pages=settings.max_visual_ocr_pages,
+                soffice_bin=settings.soffice_bin,
+            )
     except Exception as e:
         logger.exception("変換エラー: %s", file.filename)
         raise HTTPException(status_code=500, detail=f"ファイル変換エラー: {e}") from e
@@ -233,16 +261,37 @@ async def bulk_upload_from_folder(settings=Depends(_get_settings)) -> dict:
             rel = path.relative_to(bulk_dir)
             project = rel.parts[0] if len(rel.parts) > 1 else ""
 
-            chunks = converter.convert_to_chunks(
-                file_bytes=file_bytes,
-                filename=path.name,
-                image_root_dir=settings.extracted_image_dir,
-                excel_rows_per_chunk=settings.excel_table_rows_per_chunk,
-                ocr_lang=settings.ocr_lang,
-                enable_visual_page_ocr=settings.enable_visual_page_ocr,
-                max_visual_ocr_pages=settings.max_visual_ocr_pages,
-                soffice_bin=settings.soffice_bin,
-            )
+            if suffix in converter.IMAGE_EXTENSIONS:
+                description = await llm.analyze_image_with_ai(
+                    image_bytes=file_bytes,
+                    filename=path.name,
+                    model=settings.copilot_model,
+                )
+                chunks = [
+                    {
+                        "text": f"File: {path.name}\n{description}",
+                        "metadata": {
+                            "content_type": "image",
+                            "extractor": "copilot-vision",
+                        },
+                    }
+                ]
+            elif suffix in converter.DRAWIO_EXTENSIONS:
+                chunks = converter.convert_drawio_to_chunks(
+                    file_bytes=file_bytes,
+                    source_filename=path.name,
+                )
+            else:
+                chunks = converter.convert_to_chunks(
+                    file_bytes=file_bytes,
+                    filename=path.name,
+                    image_root_dir=settings.extracted_image_dir,
+                    excel_rows_per_chunk=settings.excel_table_rows_per_chunk,
+                    ocr_lang=settings.ocr_lang,
+                    enable_visual_page_ocr=settings.enable_visual_page_ocr,
+                    max_visual_ocr_pages=settings.max_visual_ocr_pages,
+                    soffice_bin=settings.soffice_bin,
+                )
             if not chunks:
                 raise ValueError("有効なテキストを抽出できませんでした")
 
@@ -266,6 +315,7 @@ async def bulk_upload_from_folder(settings=Depends(_get_settings)) -> dict:
                     "table_chunk_count": resp.table_chunk_count,
                     "image_chunk_count": resp.image_chunk_count,
                     "visual_chunk_count": resp.visual_chunk_count,
+                    "diagram_chunk_count": resp.diagram_chunk_count,
                     "project": resp.project,
                     "message": resp.message,
                 }

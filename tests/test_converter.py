@@ -187,3 +187,119 @@ class TestXlsxConversion:
         table_chunks = [c for c in chunks if c["metadata"].get("content_type") == "table"]
         # 20行 / 5行 = 4チャンク
         assert len(table_chunks) >= 4
+
+
+class TestDrawioConversion:
+    """drawio ファイル変換のテスト。"""
+
+    def test_inline_xml_single_page(self):
+        """インラインXMLの単一ページdrawioを変換できる。"""
+        from app.services.converter import convert_drawio_to_chunks
+
+        drawio_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<mxfile>
+  <diagram name="インフラ構成" id="page1">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="Webサーバー" style="rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="100" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="DBサーバー" style="rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="100" width="120" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>"""
+        chunks = convert_drawio_to_chunks(
+            file_bytes=drawio_xml.encode("utf-8"),
+            source_filename="infra.drawio",
+        )
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk["metadata"]["content_type"] == "diagram"
+        assert chunk["metadata"]["extractor"] == "drawio-xml"
+        assert chunk["metadata"]["page_name"] == "インフラ構成"
+        assert chunk["metadata"]["page_index"] == 1
+        assert "File: infra.drawio" in chunk["text"]
+        assert "Format: drawio/mxGraph XML" in chunk["text"]
+        assert "mxGraphModel" in chunk["text"]
+
+    def test_multi_page_drawio(self):
+        """複数ページのdrawioが各ページ1チャンクに変換される。"""
+        from app.services.converter import convert_drawio_to_chunks
+
+        drawio_xml = """<mxfile>
+  <diagram name="Page-1">
+    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" value="A" parent="0"/></root></mxGraphModel>
+  </diagram>
+  <diagram name="Page-2">
+    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" value="B" parent="0"/></root></mxGraphModel>
+  </diagram>
+  <diagram name="Page-3">
+    <mxGraphModel><root><mxCell id="0"/><mxCell id="1" value="C" parent="0"/></root></mxGraphModel>
+  </diagram>
+</mxfile>"""
+        chunks = convert_drawio_to_chunks(
+            file_bytes=drawio_xml.encode("utf-8"),
+            source_filename="multi.drawio",
+        )
+        assert len(chunks) == 3
+        assert chunks[0]["metadata"]["page_name"] == "Page-1"
+        assert chunks[1]["metadata"]["page_name"] == "Page-2"
+        assert chunks[2]["metadata"]["page_name"] == "Page-3"
+        assert chunks[0]["metadata"]["page_index"] == 1
+        assert chunks[2]["metadata"]["page_index"] == 3
+
+    def test_compressed_page_content(self):
+        """base64+rawDEFLATE圧縮コンテンツのdrawioを変換できる。"""
+        import base64
+        import zlib
+        from app.services.converter import convert_drawio_to_chunks
+
+        inner_xml = "<mxGraphModel><root><mxCell id=\"0\"/><mxCell id=\"1\" value=\"圧縮テスト\" parent=\"0\"/></root></mxGraphModel>"
+
+        # rawDeflate圧縮 (wbits=-15)
+        compress_obj = zlib.compressobj(wbits=-15)
+        raw_deflate = compress_obj.compress(inner_xml.encode("utf-8")) + compress_obj.flush()
+        b64content = base64.b64encode(raw_deflate).decode("utf-8")
+
+        drawio_xml = f"""<mxfile>
+  <diagram name="CompressedPage">{b64content}</diagram>
+</mxfile>"""
+        chunks = convert_drawio_to_chunks(
+            file_bytes=drawio_xml.encode("utf-8"),
+            source_filename="compressed.drawio",
+        )
+        assert len(chunks) == 1
+        assert "mxGraphModel" in chunks[0]["text"]
+        assert chunks[0]["metadata"]["page_name"] == "CompressedPage"
+
+    def test_invalid_xml_returns_empty(self):
+        """不正なXMLは空リストを返す。"""
+        from app.services.converter import convert_drawio_to_chunks
+
+        chunks = convert_drawio_to_chunks(
+            file_bytes=b"this is not xml <<<",
+            source_filename="bad.drawio",
+        )
+        assert chunks == []
+
+    def test_dio_extension(self):
+        """.dio 拡張子も変換できる。"""
+        from app.services.converter import convert_drawio_to_chunks, DRAWIO_EXTENSIONS
+
+        assert ".dio" in DRAWIO_EXTENSIONS
+
+        drawio_xml = """<mxfile>
+  <diagram name="Test">
+    <mxGraphModel><root><mxCell id="0"/></root></mxGraphModel>
+  </diagram>
+</mxfile>"""
+        chunks = convert_drawio_to_chunks(
+            file_bytes=drawio_xml.encode("utf-8"),
+            source_filename="arch.dio",
+        )
+        assert len(chunks) == 1
