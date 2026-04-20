@@ -35,6 +35,7 @@ const projectDialogCreate = document.getElementById("projectDialogCreate");
 const newChatBtn     = document.getElementById("newChatBtn");
 const toastContainer = document.getElementById("toastContainer");
 const reasoningModeToggle = document.getElementById("reasoningModeToggle");
+const premiumToggle = document.getElementById("premiumToggle");
 const wingFilter = document.getElementById("wingFilter");
 const roomFilter = document.getElementById("roomFilter");
 const contentTypeFilter = document.getElementById("contentTypeFilter");
@@ -91,6 +92,8 @@ const I18N = {
     welcomeSubDesc: "GitHub Copilot SDK がローカル知識ベースを検索し、仕様に基づいた回答を生成します。",
     reasoningModeLabel: "推論あり",
     reasoningModeTitle: "推論ありモード: 仕様書を踏まえた設計提案・スキーマ検討を許可します",
+    premiumLabel: "プレミアム",
+    premiumTitle: "プレミアムリクエスト使用: オフにすると消費量0のモデルのみ表示します",
     modelLoading: "読み込み中...",
     advancedFilterAll: "詳細フィルタ: すべて",
     advancedFilterPrefix: "詳細フィルタ",
@@ -196,6 +199,8 @@ const I18N = {
     welcomeSubDesc: "GitHub Copilot SDK searches the local knowledge base and generates spec-grounded answers.",
     reasoningModeLabel: "Reasoning",
     reasoningModeTitle: "Reasoning mode: allows design proposals and schema discussions grounded in documents.",
+    premiumLabel: "Premium",
+    premiumTitle: "Use premium requests: when off, only models with zero cost are shown.",
     modelLoading: "Loading...",
     advancedFilterAll: "Advanced filter: All",
     advancedFilterPrefix: "Advanced filter",
@@ -390,6 +395,7 @@ function applyStaticTranslations() {
   setText("welcomeDesc", t("welcomeDesc"));
   setText("welcomeSubDesc", t("welcomeSubDesc"));
   setText("reasoningModeLabel", t("reasoningModeLabel"));
+  setText("premiumLabel", t("premiumLabel"));
   setText("contextTitle", t("contextTitle"));
   setText("projectDialogTitle", t("projectDialogTitle"));
   setText("projectDialogHelp", t("projectDialogHelp"));
@@ -411,6 +417,9 @@ function applyStaticTranslations() {
 
   const mode = document.getElementById("modeToggleLabel");
   if (mode) mode.title = t("reasoningModeTitle");
+
+  const premiumLabel = document.getElementById("premiumToggleLabel");
+  if (premiumLabel) premiumLabel.title = t("premiumTitle");
 
   const dialogInput = document.getElementById("projectDialogInput");
   if (dialogInput) dialogInput.placeholder = t("projectDialogPlaceholder");
@@ -759,7 +768,9 @@ async function loadRetrievalLogs(sessionId) {
 
 async function loadModels() {
   try {
-    const res = await fetch("/api/models");
+    const usePremium = premiumToggle ? premiumToggle.checked : true;
+    const url = usePremium ? "/api/models" : "/api/models?premium=false";
+    const res = await fetch(url);
     if (!res.ok) throw new Error(res.statusText);
     const models = await res.json();
     modelSelect.innerHTML = "";
@@ -1554,6 +1565,7 @@ if (projectDialogBackdrop) {
   initTheme();
   initLanguage();
   initSidebarUi();
+  premiumToggle?.addEventListener("change", () => loadModels());
   await Promise.all([loadModels(), loadHistory(), loadProjects(), loadDocuments()]);
   renderContextChips();
   updateAdvancedScopeSummary();
