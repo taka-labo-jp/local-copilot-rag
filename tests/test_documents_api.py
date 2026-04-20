@@ -231,15 +231,29 @@ class TestMoveDocument:
 
 
 class TestBulkUpload:
-    """POST /api/documents/bulk-upload のテスト。"""
+    """POST /api/documents/bulk-upload のテスト（SSE ストリーミング）。"""
+
+    @staticmethod
+    def _parse_sse(content: bytes) -> list[dict]:
+        """SSE レスポンスを JSON イベントのリストにパースする。"""
+        import json
+        events = []
+        for line in content.decode("utf-8").splitlines():
+            if line.startswith("data: "):
+                try:
+                    events.append(json.loads(line[6:]))
+                except Exception:
+                    pass
+        return events
 
     def test_bulk_upload_empty_folder(self, app_client):
         """空フォルダの一括取込は0件を返す。"""
         resp = app_client.post("/api/documents/bulk-upload")
         assert resp.status_code == 200
-        body = resp.json()
-        assert body["total"] == 0
-        assert body["uploaded"] == 0
+        events = self._parse_sse(resp.content)
+        done = next(e for e in events if e.get("type") == "done")
+        assert done["total"] == 0
+        assert done["uploaded"] == 0
 
     def test_bulk_upload_with_files(self, app_client, mock_settings):
         """フォルダ内ファイルが正常に一括取込される。"""
@@ -249,10 +263,11 @@ class TestBulkUpload:
 
         resp = app_client.post("/api/documents/bulk-upload")
         assert resp.status_code == 200
-        body = resp.json()
-        assert body["total"] == 2
-        assert body["uploaded"] == 2
-        assert body["failed"] == 0
+        events = self._parse_sse(resp.content)
+        done = next(e for e in events if e.get("type") == "done")
+        assert done["total"] == 2
+        assert done["uploaded"] == 2
+        assert done["failed"] == 0
 
     def test_bulk_upload_with_unsupported(self, app_client, mock_settings):
         """未対応ファイルはスキップされ failed カウントが増える。"""
@@ -261,22 +276,20 @@ class TestBulkUpload:
         (bulk_dir / "bad.exe").write_bytes(b"MZ")
 
         resp = app_client.post("/api/documents/bulk-upload")
-        body = resp.json()
-        assert body["uploaded"] == 1
-        assert body["failed"] == 1
+        events = self._parse_sse(resp.content)
+        done = next(e for e in events if e.get("type") == "done")
+        assert done["uploaded"] == 1
+        assert done["failed"] == 1
 
-    def test_bulk_upload_project_from_subfolder(self, app_client, mock_settings):
-        """サブフォルダ名がプロジェクト名として使われる。"""
+    def test_bulk_upload_project_param(self, app_client, mock_settings):
+        """project パラメータで指定したプロジェクトに登録される。"""
         bulk_dir = Path(mock_settings.bulk_upload_dir)
-        proj_dir = bulk_dir / "MyProject"
-        proj_dir.mkdir()
-        (proj_dir / "doc.txt").write_text("project doc", encoding="utf-8")
+        (bulk_dir / "doc.txt").write_text("project doc", encoding="utf-8")
 
-        resp = app_client.post("/api/documents/bulk-upload")
-        body = resp.json()
-        assert body["uploaded"] == 1
-        result = body["results"][0]
-        assert result["project"] == "MyProject"
+        resp = app_client.post("/api/documents/bulk-upload", data={"project": "MyProject"})
+        events = self._parse_sse(resp.content)
+        done = next(e for e in events if e.get("type") == "done")
+        assert done["uploaded"] == 1
 
 
 class TestAllowedExtensions:

@@ -122,13 +122,19 @@ async def chat(req: ChatRequest, settings=Depends(_get_settings)) -> StreamingRe
     async def event_stream():
         # セッションIDをまず送信
         yield f"data: {json.dumps({'type': 'session_id', 'session_id': session_id})}\n\n"
+        # 思考中ステータス
+        yield f"data: {json.dumps({'type': 'status', 'status': 'thinking'})}\n\n"
 
         collected = []
         retrieval_logs: list[dict[str, Any]] = []
+        pending_status_events: list[dict] = []
 
         def _on_search(item: dict[str, Any]) -> None:
             item["call_index"] = len(retrieval_logs) + 1
             retrieval_logs.append(item)
+            pending_status_events.append(
+                {"type": "status", "status": "searching", "query": item.get("query", "")}
+            )
 
         try:
             async for chunk in llm.generate_stream(
@@ -139,6 +145,9 @@ async def chat(req: ChatRequest, settings=Depends(_get_settings)) -> StreamingRe
                 on_search=_on_search,
                 search_filters=search_filters or None,
             ):
+                # 検索イベントが溜まっていれば先に送信
+                while pending_status_events:
+                    yield f"data: {json.dumps(pending_status_events.pop(0))}\n\n"
                 collected.append(chunk)
                 yield f"data: {json.dumps({'type': 'delta', 'content': chunk})}\n\n"
         except Exception as e:

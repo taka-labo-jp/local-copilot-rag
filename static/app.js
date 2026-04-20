@@ -175,6 +175,10 @@ const I18N = {
     uploadFailedItem: "❌ {name}: {message}",
     bulkUploadDone: "一括アップロード完了: {uploaded}/{total} 件（失敗: {failed}）",
     bulkUploadFailed: "一括アップロード失敗: {message}",
+    bulkUploadProgress: "{index}/{total}: {filename}",
+    bulkUploadStarted: "一括アップロード開始...",
+    chatStatusThinking: "✍️ 回答生成中...",
+    chatStatusSearching: "🔍 コンテキスト検索中: {query}",
     modelLabelJp: "日本語",
     modelLabelEn: "English",
     themeSwitch: "テーマ切替",
@@ -282,6 +286,10 @@ const I18N = {
     uploadFailedItem: "❌ {name}: {message}",
     bulkUploadDone: "Bulk upload completed: {uploaded}/{total} (failed: {failed})",
     bulkUploadFailed: "Bulk upload failed: {message}",
+    bulkUploadProgress: "{index}/{total}: {filename}",
+    bulkUploadStarted: "Starting bulk upload...",
+    chatStatusThinking: "✍️ Generating answer...",
+    chatStatusSearching: "🔍 Searching context: {query}",
     modelLabelJp: "Japanese",
     modelLabelEn: "English",
     themeSwitch: "Toggle theme",
@@ -879,6 +887,17 @@ async function sendMessage() {
   const botBubble = appendMessage("assistant", "");
   showTyping();
 
+  // ステータスバー（回答バブルの直前に挿入）
+  const statusBar = document.createElement("div");
+  statusBar.className = "chat-status-bar";
+  statusBar.textContent = t("chatStatusThinking");
+  const botMsg = botBubble.closest(".msg");
+  if (botMsg) messagesEl.insertBefore(statusBar, botMsg);
+
+  const clearStatus = () => {
+    statusBar.remove();
+  };
+
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
@@ -921,7 +940,14 @@ async function sendMessage() {
 
         if (ev.type === "session_id") {
           currentSessionId = ev.session_id;
+        } else if (ev.type === "status") {
+          if (ev.status === "thinking") {
+            statusBar.textContent = t("chatStatusThinking");
+          } else if (ev.status === "searching") {
+            statusBar.textContent = t("chatStatusSearching", { query: ev.query || "" });
+          }
         } else if (ev.type === "delta") {
+          clearStatus();
           accumulated += ev.content;
           botBubble.innerHTML = sanitizeRenderedHtml(marked.parse(accumulated));
           botBubble.dataset.raw = accumulated;
@@ -946,10 +972,12 @@ async function sendMessage() {
 
   } catch (e) {
     removeTyping();
+    clearStatus();
     const message = normalizeChatErrorMessage(e);
     botBubble.textContent = `⚠️ ${t("chatError", { message })}`;
     showToast(message, "error");
   } finally {
+    clearStatus();
     setInputEnabled(true);
     inputEl.focus();
   }
@@ -1452,26 +1480,101 @@ async function uploadBulkFromFolder() {
   if (!bulkUploadBtn) return;
   bulkUploadBtn.disabled = true;
 
+  const bulkProgress = document.getElementById("bulkProgress");
+  const bulkBar = document.getElementById("bulkBar");
+  const bulkStatus = document.getElementById("bulkStatus");
+  const bulkLog = document.getElementById("bulkLog");
+
+  if (bulkProgress) {
+    bulkProgress.style.display = "block";
+    bulkBar.value = 0;
+    bulkStatus.textContent = t("bulkUploadStarted");
+    bulkLog.innerHTML = "";
+  }
+
   try {
-    const res = await fetch("/api/documents/bulk-upload", { method: "POST" });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || res.statusText);
+    const project = uploadProjectSelect?.value || "";
+    const formData = new FormData();
+    formData.append("project", project);
 
-    showToast(
-      t("bulkUploadDone", { uploaded: data.uploaded, total: data.total, failed: data.failed }),
-      data.failed > 0 ? "warn" : "success",
-    );
+    const res = await fetch("/api/documents/bulk-upload", { method: "POST", body: formData });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
 
-    for (const r of data.results || []) {
-      if (r.status === "failed") {
-        showToast(`❌ ${r.filename}: ${r.reason}`, "error");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let uploaded = 0;
+    let failed = 0;
+    let total = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      const lines = buf.split("\n");
+      buf = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (ev.type === "start") {
+          total = ev.total;
+          if (bulkStatus) bulkStatus.textContent = t("bulkUploadStarted");
+        } else if (ev.type === "file_result") {
+          total = ev.total || total;
+          if (ev.status === "uploaded") {
+            uploaded++;
+            if (bulkLog) {
+              const item = document.createElement("div");
+              item.className = "bulk-log-item success";
+              item.textContent = t("uploadDoneItem", { name: ev.filename, count: ev.drawer_count || 0, overwrite: ev.overwritten_count > 0 ? t("uploadOverwrite", { overwritten: ev.overwritten_count, deleted: 0 }) : "" });
+              bulkLog.appendChild(item);
+            }
+          } else {
+            failed++;
+            if (bulkLog) {
+              const item = document.createElement("div");
+              item.className = "bulk-log-item error";
+              item.textContent = t("uploadFailedItem", { name: ev.filename, message: ev.reason || "" });
+              bulkLog.appendChild(item);
+            }
+          }
+          if (bulkBar && total > 0) {
+            bulkBar.value = Math.round(((uploaded + failed) / total) * 100);
+          }
+          if (bulkStatus) bulkStatus.textContent = t("bulkUploadProgress", { index: ev.index, total: ev.total, filename: ev.filename });
+          // ログ末尾を表示
+          if (bulkLog) bulkLog.scrollTop = bulkLog.scrollHeight;
+        } else if (ev.type === "done") {
+          uploaded = ev.uploaded;
+          failed = ev.failed;
+          total = ev.total;
+          if (bulkBar) bulkBar.value = 100;
+          if (bulkStatus) {
+            bulkStatus.textContent = t("bulkUploadDone", { uploaded, total, failed });
+          }
+          showToast(
+            t("bulkUploadDone", { uploaded, total, failed }),
+            failed > 0 ? "warn" : "success",
+          );
+        }
       }
     }
   } catch (e) {
+    if (bulkStatus) bulkStatus.textContent = t("bulkUploadFailed", { message: e.message });
     showToast(t("bulkUploadFailed", { message: e.message }), "error");
   } finally {
     bulkUploadBtn.disabled = false;
     await loadDocuments();
+    setTimeout(() => {
+      if (bulkProgress) bulkProgress.style.display = "none";
+    }, 3000);
   }
 }
 

@@ -40,7 +40,7 @@
             <!-- アップロードエリア（コンパクト） -->
             <label class="upload-area" id="uploadArea">
               <input type="file" id="fileInput" multiple
-                accept=".docx,.xlsx,.pptx,.doc,.xls,.ppt,.pdf,.html,.htm,.md,.txt,.csv,.json,.xml,.epub,.zip" />
+                accept=".docx,.xlsx,.pptx,.doc,.xls,.ppt,.pdf,.html,.htm,.md,.txt,.csv,.json,.xml,.epub,.zip,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.webp,.drawio,.dio" />
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M7 1v8M4 4l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 <path d="M1 10v1a2 2 0 002 2h8a2 2 0 002-2v-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -53,6 +53,11 @@
             </div>
             <button class="bulk-upload-btn" id="bulkUploadBtn" type="button">一括アップロード（フォルダ再帰）</button>
             <div class="bulk-upload-note" id="bulkUploadNote">対象フォルダ: bulk_uploads（再帰）</div>
+            <div class="upload-progress" id="bulkProgress" style="display:none">
+              <progress id="bulkBar" max="100" value="0"></progress>
+              <span id="bulkStatus" class="upload-status-text"></span>
+              <div id="bulkLog" class="bulk-log"></div>
+            </div>
             <div class="project-toolbar">
               <div class="project-row">
                 <select id="uploadProjectSelect" class="project-select" title="アップロード先プロジェクト">

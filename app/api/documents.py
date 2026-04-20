@@ -1,4 +1,5 @@
 """ドキュメントアップロードAPI — ファイルを受け取り markitdown で変換して Chroma に登録"""
+import json
 import logging
 import sqlite3
 from collections import Counter
@@ -7,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.models.document import (
     DocumentInfo,
@@ -230,113 +232,96 @@ async def upload_document(
 
 
 @router.post("/bulk-upload")
-async def bulk_upload_from_folder(settings=Depends(_get_settings)) -> dict:
-    """サーバー側フォルダ内のファイルを再帰的に一括取り込みする。"""
+async def bulk_upload_from_folder(
+    project: str = Form(""),
+    settings=Depends(_get_settings),
+) -> StreamingResponse:
+    """サーバー側フォルダ内のファイルを再帰的に一括取り込みし、進捗を SSE で送信する。"""
     bulk_dir = Path(settings.bulk_upload_dir)
     bulk_dir.mkdir(parents=True, exist_ok=True)
 
     files = sorted([p for p in bulk_dir.rglob("*") if p.is_file()])
-    results: list[dict] = []
-    uploaded = 0
-    failed = 0
 
-    for path in files:
-        suffix = path.suffix.lower()
-        if suffix not in ALLOWED_EXTENSIONS:
-            failed += 1
-            results.append(
-                {
-                    "filename": path.name,
-                    "status": "failed",
-                    "reason": f"未対応の形式です: {suffix}",
-                }
-            )
-            continue
+    async def event_stream():
+        uploaded = 0
+        failed = 0
+        total = len(files)
 
-        try:
-            file_bytes = path.read_bytes()
-            if len(file_bytes) == 0:
-                raise ValueError("空のファイルです")
+        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
 
-            rel = path.relative_to(bulk_dir)
-            project = rel.parts[0] if len(rel.parts) > 1 else ""
+        for idx, path in enumerate(files):
+            suffix = path.suffix.lower()
+            if suffix not in ALLOWED_EXTENSIONS:
+                failed += 1
+                yield f"data: {json.dumps({'type': 'file_result', 'filename': path.name, 'status': 'failed', 'reason': f'未対応の形式です: {suffix}', 'index': idx + 1, 'total': total})}\n\n"
+                continue
 
-            if suffix in converter.IMAGE_EXTENSIONS:
-                description = await llm.analyze_image_with_ai(
-                    image_bytes=file_bytes,
-                    filename=path.name,
-                    model=settings.copilot_model,
-                )
-                chunks = [
-                    {
-                        "text": f"File: {path.name}\n{description}",
-                        "metadata": {
-                            "content_type": "image",
-                            "extractor": "copilot-vision",
-                        },
-                    }
-                ]
-            elif suffix in converter.DRAWIO_EXTENSIONS:
-                chunks = converter.convert_drawio_to_chunks(
-                    file_bytes=file_bytes,
+            try:
+                file_bytes = path.read_bytes()
+                if len(file_bytes) == 0:
+                    raise ValueError("空のファイルです")
+
+                # project パラメータを優先し、未指定ならフォルダ構造を無視して空文字（未分類）
+                file_project = project
+
+                if suffix in converter.IMAGE_EXTENSIONS:
+                    description = await llm.analyze_image_with_ai(
+                        image_bytes=file_bytes,
+                        filename=path.name,
+                        model=settings.copilot_model,
+                    )
+                    chunks = [
+                        {
+                            "text": f"File: {path.name}\n{description}",
+                            "metadata": {
+                                "content_type": "image",
+                                "extractor": "copilot-vision",
+                            },
+                        }
+                    ]
+                elif suffix in converter.DRAWIO_EXTENSIONS:
+                    chunks = converter.convert_drawio_to_chunks(
+                        file_bytes=file_bytes,
+                        source_filename=path.name,
+                    )
+                else:
+                    chunks = converter.convert_to_chunks(
+                        file_bytes=file_bytes,
+                        filename=path.name,
+                        image_root_dir=settings.extracted_image_dir,
+                        excel_rows_per_chunk=settings.excel_table_rows_per_chunk,
+                        ocr_lang=settings.ocr_lang,
+                        enable_visual_page_ocr=settings.enable_visual_page_ocr,
+                        max_visual_ocr_pages=settings.max_visual_ocr_pages,
+                        soffice_bin=settings.soffice_bin,
+                    )
+                if not chunks:
+                    raise ValueError("有効なテキストを抽出できませんでした")
+
+                resp = await _register_document(
+                    chunks=chunks,
                     source_filename=path.name,
+                    wing="specifications",
+                    room_name=path.stem,
+                    project=file_project,
+                    settings=settings,
                 )
-            else:
-                chunks = converter.convert_to_chunks(
-                    file_bytes=file_bytes,
-                    filename=path.name,
-                    image_root_dir=settings.extracted_image_dir,
-                    excel_rows_per_chunk=settings.excel_table_rows_per_chunk,
-                    ocr_lang=settings.ocr_lang,
-                    enable_visual_page_ocr=settings.enable_visual_page_ocr,
-                    max_visual_ocr_pages=settings.max_visual_ocr_pages,
-                    soffice_bin=settings.soffice_bin,
-                )
-            if not chunks:
-                raise ValueError("有効なテキストを抽出できませんでした")
+                uploaded += 1
+                yield f"data: {json.dumps({'type': 'file_result', 'filename': path.name, 'status': 'uploaded', 'drawer_count': resp.drawer_count, 'overwritten_count': resp.overwritten_count, 'index': idx + 1, 'total': total})}\n\n"
+            except Exception as e:
+                failed += 1
+                yield f"data: {json.dumps({'type': 'file_result', 'filename': str(path.relative_to(bulk_dir)), 'status': 'failed', 'reason': str(e), 'index': idx + 1, 'total': total})}\n\n"
 
-            resp = await _register_document(
-                chunks=chunks,
-                source_filename=path.name,
-                wing="specifications",
-                room_name=path.stem,
-                project=project,
-                settings=settings,
-            )
-            uploaded += 1
-            results.append(
-                {
-                    "filename": path.name,
-                    "status": "uploaded",
-                    "drawer_count": resp.drawer_count,
-                    "overwritten_count": resp.overwritten_count,
-                    "deleted_chunks": resp.deleted_chunks,
-                    "text_chunk_count": resp.text_chunk_count,
-                    "table_chunk_count": resp.table_chunk_count,
-                    "image_chunk_count": resp.image_chunk_count,
-                    "visual_chunk_count": resp.visual_chunk_count,
-                    "diagram_chunk_count": resp.diagram_chunk_count,
-                    "project": resp.project,
-                    "message": resp.message,
-                }
-            )
-        except Exception as e:
-            failed += 1
-            results.append(
-                {
-                    "filename": str(path.relative_to(bulk_dir)),
-                    "status": "failed",
-                    "reason": str(e),
-                }
-            )
+        yield f"data: {json.dumps({'type': 'done', 'uploaded': uploaded, 'failed': failed, 'total': total})}\n\n"
 
-    return {
-        "folder": str(bulk_dir),
-        "total": len(files),
-        "uploaded": uploaded,
-        "failed": failed,
-        "results": results,
-    }
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/projects", response_model=list[ProjectInfo])
