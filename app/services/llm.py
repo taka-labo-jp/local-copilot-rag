@@ -151,13 +151,29 @@ async def stop_client() -> None:
     _restore_asyncio_exception_filter()
 
 
-async def list_models() -> list[dict]:
-    """利用可能なモデル一覧を Copilot SDK から取得して返す。"""
+async def list_models(premium: bool | None = None) -> list[dict]:
+    """利用可能なモデル一覧を Copilot SDK から取得して返す。
+
+    Args:
+        premium: None=すべて返す, True=プレミアムリクエスト消費ありのモデルのみ,
+                 False=消費量が0のモデルのみ（プレミアムリクエスト不要）
+    """
     client = CopilotClient()
     try:
         await client.start()
         models = await client.list_models()
-        return [{"id": m.id, "name": getattr(m, "name", m.id)} for m in models]
+        result = []
+        for m in models:
+            billing = getattr(m, "billing", None)
+            cost_multiplier = getattr(billing, "cost_multiplier", 0) if billing else 0
+            if premium is False and cost_multiplier != 0:
+                continue
+            result.append({
+                "id": m.id,
+                "name": getattr(m, "name", m.id),
+                "billing": {"cost_multiplier": cost_multiplier},
+            })
+        return result
     except Exception:
         logger.exception("list_models failed")
         return []
