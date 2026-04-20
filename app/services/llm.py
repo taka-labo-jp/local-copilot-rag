@@ -155,7 +155,8 @@ async def list_models(premium: bool | None = None) -> list[dict]:
     """利用可能なモデル一覧を Copilot SDK から取得して返す。
 
     Args:
-        premium: None=すべて返す, True=プレミアムリクエスト消費ありのモデルのみ,
+        premium: None=すべて返す（フィルタなし）,
+                 True=プレミアムリクエスト消費ありのモデルのみ（cost_multiplier > 0）,
                  False=消費量が0のモデルのみ（プレミアムリクエスト不要）
     """
     client = CopilotClient()
@@ -167,6 +168,8 @@ async def list_models(premium: bool | None = None) -> list[dict]:
             billing = getattr(m, "billing", None)
             cost_multiplier = getattr(billing, "cost_multiplier", 0) if billing else 0
             if premium is False and cost_multiplier != 0:
+                continue
+            if premium is True and cost_multiplier == 0:
                 continue
             result.append({
                 "id": m.id,

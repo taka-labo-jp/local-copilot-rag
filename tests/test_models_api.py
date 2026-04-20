@@ -47,6 +47,9 @@ class TestModelsApi:
             resp = app_client.get("/api/models?premium=true")
         assert resp.status_code == 200
         mock.assert_called_once_with(premium=True)
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["id"] == "premium-model"
 
     def test_list_models_no_premium_param(self, app_client):
         """premium パラメータなしのとき list_models に None が渡される（全件返す）。"""
